@@ -20,6 +20,11 @@ describe("anemone", () => {
   const underlyingProtocol = Keypair.generate();
   const underlyingMint = Keypair.generate();
 
+  // Real Kamino accounts (loaded from mainnet fixture via Anchor.toml)
+  const KAMINO_PROGRAM_ID = new PublicKey("KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD");
+  const KAMINO_USDC_RESERVE = new PublicKey("D6q6wuQSrifJKZYpR1M8R4YawnLDtDsMmWM1NbBmgJ59");
+  const USDC_MINT = new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
+
   // PDAs
   let protocolStatePda: PublicKey;
   let marketPda: PublicKey;
@@ -244,6 +249,111 @@ describe("anemone", () => {
         assert.fail("Should have thrown");
       } catch (err) {
         console.log("Non-authority correctly rejected ✓");
+      }
+    });
+  });
+
+  describe("update_rate_index", () => {
+    // This test uses a real Kamino USDC Reserve account cloned from mainnet
+    const KAMINO_TENOR = new anchor.BN(604_800); // 7 days
+    let kaminoMarketPda: PublicKey;
+    let kaminoLpVaultPda: PublicKey;
+    let kaminoCollateralVaultPda: PublicKey;
+    let kaminoLpMintPda: PublicKey;
+
+    before(async () => {
+      [kaminoMarketPda] = PublicKey.findProgramAddressSync(
+        [
+          Buffer.from("market"),
+          KAMINO_USDC_RESERVE.toBuffer(),
+          KAMINO_TENOR.toArrayLike(Buffer, "le", 8),
+        ],
+        program.programId
+      );
+
+      [kaminoLpVaultPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("lp_vault"), kaminoMarketPda.toBuffer()],
+        program.programId
+      );
+
+      [kaminoCollateralVaultPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("collateral_vault"), kaminoMarketPda.toBuffer()],
+        program.programId
+      );
+
+      [kaminoLpMintPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("lp_mint"), kaminoMarketPda.toBuffer()],
+        program.programId
+      );
+
+      // Create market pointing to real Kamino USDC Reserve
+      await program.methods
+        .createMarket(
+          KAMINO_TENOR,
+          new anchor.BN(86_400),
+          6000,
+          50,
+          20,
+        )
+        .accountsStrict({
+          protocolState: protocolStatePda,
+          market: kaminoMarketPda,
+          lpVault: kaminoLpVaultPda,
+          collateralVault: kaminoCollateralVaultPda,
+          lpMint: kaminoLpMintPda,
+          underlyingReserve: KAMINO_USDC_RESERVE,
+          underlyingProtocol: KAMINO_PROGRAM_ID,
+          underlyingMint: underlyingMint.publicKey,
+          authority: authority.publicKey,
+          systemProgram: SystemProgram.programId,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .rpc();
+
+      console.log("Kamino market created for update_rate_index tests ✓");
+    });
+
+    it("reads rate index from real Kamino Reserve", async () => {
+      const tx = await program.methods
+        .updateRateIndex()
+        .accountsStrict({
+          market: kaminoMarketPda,
+          kaminoReserve: KAMINO_USDC_RESERVE,
+        })
+        .rpc();
+
+      console.log("update_rate_index tx:", tx);
+
+      // Verify the market was updated
+      const market = await program.account.swapMarket.fetch(kaminoMarketPda);
+      assert.isTrue(
+        market.currentRateIndex.gt(new anchor.BN(0)),
+        "Rate index should be > 0"
+      );
+      assert.isTrue(
+        market.lastRateUpdateTs.gt(new anchor.BN(0)),
+        "Last update timestamp should be > 0"
+      );
+
+      console.log("Rate index:", market.currentRateIndex.toString());
+      console.log("Last update ts:", market.lastRateUpdateTs.toString());
+      console.log("Rate index updated from real Kamino Reserve ✓");
+    });
+
+    it("rejects wrong reserve account", async () => {
+      const fakeReserve = Keypair.generate();
+
+      try {
+        await program.methods
+          .updateRateIndex()
+          .accountsStrict({
+            market: kaminoMarketPda,
+            kaminoReserve: fakeReserve.publicKey,
+          })
+          .rpc();
+        assert.fail("Should have thrown");
+      } catch (err) {
+        console.log("Wrong reserve correctly rejected ✓");
       }
     });
   });

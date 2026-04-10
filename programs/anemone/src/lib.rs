@@ -2,6 +2,8 @@ use anchor_lang::prelude::*;
 
 pub mod state;
 pub mod instructions;
+pub mod helpers;
+pub mod errors;
 
 use instructions::*;
 
@@ -45,5 +47,9 @@ pub mod anemone {
             base_spread_bps,
             max_leverage,
         )
+    }
+
+    pub fn update_rate_index(ctx: Context<UpdateRateIndex>) -> Result<()> {
+        instructions::keeper::update_rate_index::handle_update_rate_index(ctx)
     }
 }
