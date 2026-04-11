@@ -2,7 +2,13 @@ import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { Anemone } from "../target/types/anemone";
 import { PublicKey, Keypair, SystemProgram } from "@solana/web3.js";
-import { TOKEN_PROGRAM_ID, createMint } from "@solana/spl-token";
+import {
+  TOKEN_PROGRAM_ID,
+  createMint,
+  createAccount,
+  mintTo,
+  getAccount,
+} from "@solana/spl-token";
 import { assert } from "chai";
 
 describe("anemone", () => {
@@ -354,6 +360,198 @@ describe("anemone", () => {
         assert.fail("Should have thrown");
       } catch (err) {
         console.log("Wrong reserve correctly rejected ✓");
+      }
+    });
+  });
+
+  describe("deposit_liquidity & request_withdrawal", () => {
+    const DEPOSIT_AMOUNT = 10_000_000_000; // 10,000 USDC (6 decimals)
+    let depositorTokenAccount: PublicKey;
+    let depositorLpTokenAccount: PublicKey;
+    let lpPositionPda: PublicKey;
+
+    before(async () => {
+      // Derive LP position PDA
+      [lpPositionPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("lp"), authority.publicKey.toBuffer(), marketPda.toBuffer()],
+        program.programId
+      );
+
+      // Create depositor's USDC token account and mint tokens
+      depositorTokenAccount = await createAccount(
+        provider.connection,
+        (authority as any).payer,
+        underlyingMint.publicKey,
+        authority.publicKey,
+      );
+
+      await mintTo(
+        provider.connection,
+        (authority as any).payer,
+        underlyingMint.publicKey,
+        depositorTokenAccount,
+        authority.publicKey,
+        DEPOSIT_AMOUNT * 2, // Extra for second deposit
+      );
+
+      // Create depositor's LP token account
+      depositorLpTokenAccount = await createAccount(
+        provider.connection,
+        (authority as any).payer,
+        lpMintPda,
+        authority.publicKey,
+      );
+
+      console.log("LP test accounts created ✓");
+    });
+
+    it("deposits 10,000 USDC and receives 1:1 shares", async () => {
+      const tx = await program.methods
+        .depositLiquidity(new anchor.BN(DEPOSIT_AMOUNT))
+        .accountsStrict({
+          market: marketPda,
+          lpPosition: lpPositionPda,
+          lpVault: lpVaultPda,
+          lpMint: lpMintPda,
+          underlyingMint: underlyingMint.publicKey,
+          depositorTokenAccount: depositorTokenAccount,
+          depositorLpTokenAccount: depositorLpTokenAccount,
+          depositor: authority.publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+
+      console.log("deposit_liquidity tx:", tx);
+
+      // Verify market state
+      const market = await program.account.swapMarket.fetch(marketPda);
+      assert.equal(market.totalLpDeposits.toNumber(), DEPOSIT_AMOUNT);
+      assert.equal(market.totalLpShares.toNumber(), DEPOSIT_AMOUNT);
+
+      // Verify LP position
+      const lpPos = await program.account.lpPosition.fetch(lpPositionPda);
+      assert.equal(lpPos.shares.toNumber(), DEPOSIT_AMOUNT);
+      assert.equal(lpPos.depositedAmount.toNumber(), DEPOSIT_AMOUNT);
+      assert.equal(lpPos.owner.toBase58(), authority.publicKey.toBase58());
+
+      // Verify LP tokens received
+      const lpAccount = await getAccount(provider.connection, depositorLpTokenAccount);
+      assert.equal(Number(lpAccount.amount), DEPOSIT_AMOUNT);
+
+      // Verify vault received USDC
+      const vaultAccount = await getAccount(provider.connection, lpVaultPda);
+      assert.equal(Number(vaultAccount.amount), DEPOSIT_AMOUNT);
+
+      console.log("First deposit: 10,000 USDC -> 10,000 shares ✓");
+    });
+
+    it("second deposit gets proportional shares", async () => {
+      const secondAmount = 5_000_000_000; // 5,000 USDC
+
+      await program.methods
+        .depositLiquidity(new anchor.BN(secondAmount))
+        .accountsStrict({
+          market: marketPda,
+          lpPosition: lpPositionPda,
+          lpVault: lpVaultPda,
+          lpMint: lpMintPda,
+          underlyingMint: underlyingMint.publicKey,
+          depositorTokenAccount: depositorTokenAccount,
+          depositorLpTokenAccount: depositorLpTokenAccount,
+          depositor: authority.publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+
+      // Pool: 10K deposits / 10K shares. Depositing 5K → 5K shares (1:1, no yield yet)
+      const market = await program.account.swapMarket.fetch(marketPda);
+      assert.equal(market.totalLpDeposits.toNumber(), DEPOSIT_AMOUNT + secondAmount);
+      assert.equal(market.totalLpShares.toNumber(), DEPOSIT_AMOUNT + secondAmount);
+
+      const lpPos = await program.account.lpPosition.fetch(lpPositionPda);
+      assert.equal(lpPos.shares.toNumber(), DEPOSIT_AMOUNT + secondAmount);
+
+      console.log("Second deposit: 5,000 USDC -> 5,000 shares (proportional) ✓");
+    });
+
+    it("withdraws 50% of shares with fee to treasury", async () => {
+      const totalShares = DEPOSIT_AMOUNT + 5_000_000_000; // 15,000 USDC
+      const sharesToBurn = Math.floor(totalShares / 2); // 7,500
+
+      // Create treasury token account using treasury keypair so address matches protocol_state.treasury
+      const treasuryTokenAccount = await createAccount(
+        provider.connection,
+        (authority as any).payer,
+        underlyingMint.publicKey,
+        authority.publicKey,
+        treasury, // keypair → address = treasury.publicKey
+      );
+
+      const balanceBefore = await getAccount(provider.connection, depositorTokenAccount);
+
+      await program.methods
+        .requestWithdrawal(new anchor.BN(sharesToBurn))
+        .accountsStrict({
+          protocolState: protocolStatePda,
+          market: marketPda,
+          lpPosition: lpPositionPda,
+          lpVault: lpVaultPda,
+          lpMint: lpMintPda,
+          underlyingMint: underlyingMint.publicKey,
+          withdrawerLpTokenAccount: depositorLpTokenAccount,
+          withdrawerTokenAccount: depositorTokenAccount,
+          treasury: treasury.publicKey,
+          withdrawer: authority.publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .rpc();
+
+      // Verify market state
+      const market = await program.account.swapMarket.fetch(marketPda);
+      assert.equal(market.totalLpShares.toNumber(), totalShares - sharesToBurn);
+      assert.equal(market.totalLpDeposits.toNumber(), totalShares - sharesToBurn);
+
+      // Verify LP position
+      const lpPos = await program.account.lpPosition.fetch(lpPositionPda);
+      assert.equal(lpPos.shares.toNumber(), totalShares - sharesToBurn);
+
+      // Verify USDC returned (minus 0.05% fee)
+      const balanceAfter = await getAccount(provider.connection, depositorTokenAccount);
+      const received = Number(balanceAfter.amount) - Number(balanceBefore.amount);
+      const expectedFee = Math.floor(sharesToBurn * 5 / 10000); // 0.05%
+      const expectedNet = sharesToBurn - expectedFee;
+      assert.approximately(received, expectedNet, 1);
+
+      // Verify treasury got the fee
+      const treasuryAccount = await getAccount(provider.connection, treasury.publicKey);
+      assert.equal(Number(treasuryAccount.amount), expectedFee);
+
+      console.log(`Withdrawal: ${sharesToBurn} shares -> ${received} USDC (fee: ${expectedFee}) ✓`);
+    });
+
+    it("rejects withdrawal with insufficient shares", async () => {
+      try {
+        await program.methods
+          .requestWithdrawal(new anchor.BN(999_999_999_999))
+          .accountsStrict({
+            protocolState: protocolStatePda,
+            market: marketPda,
+            lpPosition: lpPositionPda,
+            lpVault: lpVaultPda,
+            lpMint: lpMintPda,
+            underlyingMint: underlyingMint.publicKey,
+            withdrawerLpTokenAccount: depositorLpTokenAccount,
+            withdrawerTokenAccount: depositorTokenAccount,
+            treasury: treasury.publicKey,
+            withdrawer: authority.publicKey,
+            tokenProgram: TOKEN_PROGRAM_ID,
+          })
+          .rpc();
+        assert.fail("Should have thrown");
+      } catch (err) {
+        console.log("Insufficient shares correctly rejected ✓");
       }
     });
   });

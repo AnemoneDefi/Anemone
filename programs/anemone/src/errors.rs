@@ -10,4 +10,16 @@ pub enum AnemoneError {
     InvalidElapsedTime,
     #[msg("Math overflow")]
     MathOverflow,
+    #[msg("Market is paused")]
+    MarketPaused,
+    #[msg("Invalid vault address")]
+    InvalidVault,
+    #[msg("Invalid mint address")]
+    InvalidMint,
+    #[msg("Amount must be greater than zero")]
+    InvalidAmount,
+    #[msg("Insufficient shares for withdrawal")]
+    InsufficientShares,
+    #[msg("Withdrawal would leave pool undercollateralized")]
+    PoolUndercollateralized,
 }
