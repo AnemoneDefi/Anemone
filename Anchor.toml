@@ -18,9 +18,40 @@ wallet = "~/.config/solana/id.json"
 [test.validator]
 bind_address = "127.0.0.1"
 
+# Kamino program (dumped from mainnet)
+[[test.validator.programs]]
+address = "KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD"
+filename = "tests/fixtures/kamino_program.so"
+
+# Kamino USDC Reserve
 [[test.validator.account]]
 address = "D6q6wuQSrifJKZYpR1M8R4YawnLDtDsMmWM1NbBmgJ59"
 filename = "tests/fixtures/kamino_usdc_reserve.json"
+
+# Kamino LendingMarket
+[[test.validator.account]]
+address = "7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF"
+filename = "tests/fixtures/kamino_lending_market.json"
+
+# Kamino lending market authority PDA
+[[test.validator.account]]
+address = "9DrvZvyWh1HuAoZxvYWMvkf2XCzryCpGgHqrMjyDWpmo"
+filename = "tests/fixtures/kamino_lending_market_authority.json"
+
+# Kamino Reserve liquidity supply (USDC vault)
+[[test.validator.account]]
+address = "Bgq7trRgVMeq33yt235zM2onQ4bRDBsY5EWiTetF4qw6"
+filename = "tests/fixtures/kamino_liquidity_supply.json"
+
+# Kamino collateral mint (k-USDC)
+[[test.validator.account]]
+address = "3DzjXRfxRm6iejfyyMynR4tScddaanrePJ1NJU2XnPPL"
+filename = "tests/fixtures/kamino_collateral_mint.json"
+
+# USDC mint (mainnet)
+[[test.validator.account]]
+address = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+filename = "tests/fixtures/usdc_mint.json"
 
 [scripts]
 test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 \"tests/**/*.ts\""

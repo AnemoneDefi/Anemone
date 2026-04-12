@@ -65,10 +65,11 @@ pub struct RequestWithdrawal<'info> {
     )]
     pub withdrawer_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
 
-    /// Treasury token account — receives withdrawal fee
+    /// Treasury token account — receives withdrawal fee, must match protocol
     #[account(
         mut,
         token::mint = underlying_mint,
+        address = protocol_state.treasury @ AnemoneError::InvalidVault,
     )]
     pub treasury: Box<InterfaceAccount<'info, TokenAccount>>,
 
