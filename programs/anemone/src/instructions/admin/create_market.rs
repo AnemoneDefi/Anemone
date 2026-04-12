@@ -31,7 +31,7 @@ pub struct CreateMarket<'info> {
         token::mint = underlying_mint,
         token::authority = market,
     )]
-    pub lp_vault: InterfaceAccount<'info, TokenAccount>,
+    pub lp_vault: Box<InterfaceAccount<'info, TokenAccount>>,
 
     /// Collateral vault: holds trader collateral
     #[account(
@@ -42,7 +42,7 @@ pub struct CreateMarket<'info> {
         token::mint = underlying_mint,
         token::authority = market,
     )]
-    pub collateral_vault: InterfaceAccount<'info, TokenAccount>,
+    pub collateral_vault: Box<InterfaceAccount<'info, TokenAccount>>,
 
     /// LP token mint: receipt tokens for liquidity providers
     #[account(
@@ -53,7 +53,22 @@ pub struct CreateMarket<'info> {
         mint::decimals = 6,
         mint::authority = market,
     )]
-    pub lp_mint: InterfaceAccount<'info, Mint>,
+    pub lp_mint: Box<InterfaceAccount<'info, Mint>>,
+
+    /// Kamino deposit account: holds k-tokens (collateral from Kamino deposits)
+    #[account(
+        init,
+        payer = authority,
+        seeds = [b"kamino_deposit", market.key().as_ref()],
+        bump,
+        token::mint = kamino_collateral_mint,
+        token::authority = market,
+    )]
+    pub kamino_deposit_account: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    /// The Kamino collateral mint (k-token, e.g. k-USDC)
+    /// CHECK: Validated off-chain. Used as mint for kamino_deposit_account.
+    pub kamino_collateral_mint: AccountInfo<'info>,
 
     /// The lending protocol's reserve account (e.g. Kamino USDC Reserve)
     /// CHECK: Validated off-chain, used to derive PDA and read rates
@@ -92,7 +107,7 @@ pub fn handle_create_market(
 
     // Vaults
     market.lp_vault = ctx.accounts.lp_vault.key();
-    market.kamino_deposit_account = Pubkey::default();
+    market.kamino_deposit_account = ctx.accounts.kamino_deposit_account.key();
     market.collateral_vault = ctx.accounts.collateral_vault.key();
     market.lp_mint = ctx.accounts.lp_mint.key();
 
@@ -113,6 +128,7 @@ pub fn handle_create_market(
     market.last_rate_update_ts = 0;
     market.cumulative_fees_earned = 0;
     market.total_open_positions = 0;
+    market.total_kamino_collateral = 0;
 
     // Meta
     market.status = 0;

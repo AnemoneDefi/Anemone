@@ -9,6 +9,7 @@ pub enum LpStatus {
 
 #[account]
 pub struct LpPosition {
+    pub is_initialized: bool,
     pub owner: Pubkey,
     pub market: Pubkey,
 
@@ -26,6 +27,7 @@ pub struct LpPosition {
 
 impl LpPosition {
     pub const SIZE: usize = 8   // discriminator
+        + 1    // is_initialized
         + 32   // owner
         + 32   // market
         + 8    // shares

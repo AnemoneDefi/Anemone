@@ -138,7 +138,8 @@ pub fn handle_deposit_liquidity(
         .ok_or(AnemoneError::MathOverflow)?;
 
     // Step 5: Create or update LP position
-    if lp_position.owner == Pubkey::default() {
+    if !lp_position.is_initialized {
+        lp_position.is_initialized = true;
         lp_position.owner = ctx.accounts.depositor.key();
         lp_position.market = market.key();
         lp_position.status = LpStatus::Active;

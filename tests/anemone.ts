@@ -25,6 +25,7 @@ describe("anemone", () => {
   const underlyingReserve = Keypair.generate();
   const underlyingProtocol = Keypair.generate();
   const underlyingMint = Keypair.generate();
+  const fakeKaminoCollateralMint = Keypair.generate();
 
   // Real Kamino accounts (loaded from mainnet fixture via Anchor.toml)
   const KAMINO_PROGRAM_ID = new PublicKey("KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD");
@@ -37,6 +38,7 @@ describe("anemone", () => {
   let lpVaultPda: PublicKey;
   let collateralVaultPda: PublicKey;
   let lpMintPda: PublicKey;
+  let kaminoDepositPda: PublicKey;
 
   const TENOR_SECONDS = new anchor.BN(2_592_000); // 30 days
 
@@ -71,6 +73,11 @@ describe("anemone", () => {
       program.programId
     );
 
+    [kaminoDepositPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("kamino_deposit"), marketPda.toBuffer()],
+      program.programId
+    );
+
     // Create the fake USDC mint for testing
     await createMint(
       provider.connection,
@@ -79,6 +86,16 @@ describe("anemone", () => {
       null,
       6,
       underlyingMint,
+    );
+
+    // Create fake k-USDC collateral mint for testing
+    await createMint(
+      provider.connection,
+      (authority as any).payer,
+      authority.publicKey,
+      null,
+      6,
+      fakeKaminoCollateralMint,
     );
   });
 
@@ -150,6 +167,8 @@ describe("anemone", () => {
           lpVault: lpVaultPda,
           collateralVault: collateralVaultPda,
           lpMint: lpMintPda,
+          kaminoDepositAccount: kaminoDepositPda,
+          kaminoCollateralMint: fakeKaminoCollateralMint.publicKey,
           underlyingReserve: underlyingReserve.publicKey,
           underlyingProtocol: underlyingProtocol.publicKey,
           underlyingMint: underlyingMint.publicKey,
@@ -228,6 +247,11 @@ describe("anemone", () => {
         program.programId
       );
 
+      const [fakeKaminoDeposit] = PublicKey.findProgramAddressSync(
+        [Buffer.from("kamino_deposit"), fakeMarketPda.toBuffer()],
+        program.programId
+      );
+
       try {
         await program.methods
           .createMarket(
@@ -243,6 +267,8 @@ describe("anemone", () => {
             lpVault: fakeLpVault,
             collateralVault: fakeCollateralVault,
             lpMint: fakeLpMint,
+            kaminoDepositAccount: fakeKaminoDeposit,
+            kaminoCollateralMint: fakeKaminoCollateralMint.publicKey,
             underlyingReserve: fakeReserve.publicKey,
             underlyingProtocol: underlyingProtocol.publicKey,
             underlyingMint: underlyingMint.publicKey,
@@ -262,10 +288,12 @@ describe("anemone", () => {
   describe("update_rate_index", () => {
     // This test uses a real Kamino USDC Reserve account cloned from mainnet
     const KAMINO_TENOR = new anchor.BN(604_800); // 7 days
+    const kaminoTestCollateralMint = Keypair.generate();
     let kaminoMarketPda: PublicKey;
     let kaminoLpVaultPda: PublicKey;
     let kaminoCollateralVaultPda: PublicKey;
     let kaminoLpMintPda: PublicKey;
+    let kaminoDepositAccountPda: PublicKey;
 
     before(async () => {
       [kaminoMarketPda] = PublicKey.findProgramAddressSync(
@@ -292,6 +320,21 @@ describe("anemone", () => {
         program.programId
       );
 
+      [kaminoDepositAccountPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("kamino_deposit"), kaminoMarketPda.toBuffer()],
+        program.programId
+      );
+
+      // Create fake collateral mint for this test market
+      await createMint(
+        provider.connection,
+        (authority as any).payer,
+        authority.publicKey,
+        null,
+        6,
+        kaminoTestCollateralMint,
+      );
+
       // Create market pointing to real Kamino USDC Reserve
       await program.methods
         .createMarket(
@@ -307,6 +350,8 @@ describe("anemone", () => {
           lpVault: kaminoLpVaultPda,
           collateralVault: kaminoCollateralVaultPda,
           lpMint: kaminoLpMintPda,
+          kaminoDepositAccount: kaminoDepositAccountPda,
+          kaminoCollateralMint: kaminoTestCollateralMint.publicKey,
           underlyingReserve: KAMINO_USDC_RESERVE,
           underlyingProtocol: KAMINO_PROGRAM_ID,
           underlyingMint: underlyingMint.publicKey,

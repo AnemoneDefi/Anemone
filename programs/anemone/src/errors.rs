@@ -22,4 +22,6 @@ pub enum AnemoneError {
     InsufficientShares,
     #[msg("Withdrawal would leave pool undercollateralized")]
     PoolUndercollateralized,
+    #[msg("Reserve data is stale — refresh before updating rate")]
+    StaleOracle,
 }
