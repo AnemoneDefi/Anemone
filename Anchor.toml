@@ -16,6 +16,7 @@ cluster = "localnet"
 wallet = "~/.config/solana/id.json"
 
 [test.validator]
+url = "https://api.mainnet-beta.solana.com"
 bind_address = "127.0.0.1"
 
 # Kamino program (dumped from mainnet)
@@ -54,4 +55,4 @@ address = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 filename = "tests/fixtures/usdc_mint.json"
 
 [scripts]
-test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 \"tests/**/*.ts\""
+test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 \"tests/*.ts\""
