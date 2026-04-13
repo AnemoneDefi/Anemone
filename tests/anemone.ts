@@ -2,7 +2,13 @@ import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { Anemone } from "../target/types/anemone";
 import { PublicKey, Keypair, SystemProgram } from "@solana/web3.js";
-import { TOKEN_PROGRAM_ID, createMint } from "@solana/spl-token";
+import {
+  TOKEN_PROGRAM_ID,
+  createMint,
+  createAccount,
+  mintTo,
+  getAccount,
+} from "@solana/spl-token";
 import { assert } from "chai";
 
 describe("anemone", () => {
@@ -19,6 +25,7 @@ describe("anemone", () => {
   const underlyingReserve = Keypair.generate();
   const underlyingProtocol = Keypair.generate();
   const underlyingMint = Keypair.generate();
+  const fakeKaminoCollateralMint = Keypair.generate();
 
   // Real Kamino accounts (loaded from mainnet fixture via Anchor.toml)
   const KAMINO_PROGRAM_ID = new PublicKey("KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD");
@@ -31,6 +38,7 @@ describe("anemone", () => {
   let lpVaultPda: PublicKey;
   let collateralVaultPda: PublicKey;
   let lpMintPda: PublicKey;
+  let kaminoDepositPda: PublicKey;
 
   const TENOR_SECONDS = new anchor.BN(2_592_000); // 30 days
 
@@ -65,6 +73,11 @@ describe("anemone", () => {
       program.programId
     );
 
+    [kaminoDepositPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("kamino_deposit"), marketPda.toBuffer()],
+      program.programId
+    );
+
     // Create the fake USDC mint for testing
     await createMint(
       provider.connection,
@@ -73,6 +86,16 @@ describe("anemone", () => {
       null,
       6,
       underlyingMint,
+    );
+
+    // Create fake k-USDC collateral mint for testing
+    await createMint(
+      provider.connection,
+      (authority as any).payer,
+      authority.publicKey,
+      null,
+      6,
+      fakeKaminoCollateralMint,
     );
   });
 
@@ -144,6 +167,8 @@ describe("anemone", () => {
           lpVault: lpVaultPda,
           collateralVault: collateralVaultPda,
           lpMint: lpMintPda,
+          kaminoDepositAccount: kaminoDepositPda,
+          kaminoCollateralMint: fakeKaminoCollateralMint.publicKey,
           underlyingReserve: underlyingReserve.publicKey,
           underlyingProtocol: underlyingProtocol.publicKey,
           underlyingMint: underlyingMint.publicKey,
@@ -222,6 +247,11 @@ describe("anemone", () => {
         program.programId
       );
 
+      const [fakeKaminoDeposit] = PublicKey.findProgramAddressSync(
+        [Buffer.from("kamino_deposit"), fakeMarketPda.toBuffer()],
+        program.programId
+      );
+
       try {
         await program.methods
           .createMarket(
@@ -237,6 +267,8 @@ describe("anemone", () => {
             lpVault: fakeLpVault,
             collateralVault: fakeCollateralVault,
             lpMint: fakeLpMint,
+            kaminoDepositAccount: fakeKaminoDeposit,
+            kaminoCollateralMint: fakeKaminoCollateralMint.publicKey,
             underlyingReserve: fakeReserve.publicKey,
             underlyingProtocol: underlyingProtocol.publicKey,
             underlyingMint: underlyingMint.publicKey,
@@ -256,10 +288,12 @@ describe("anemone", () => {
   describe("update_rate_index", () => {
     // This test uses a real Kamino USDC Reserve account cloned from mainnet
     const KAMINO_TENOR = new anchor.BN(604_800); // 7 days
+    const kaminoTestCollateralMint = Keypair.generate();
     let kaminoMarketPda: PublicKey;
     let kaminoLpVaultPda: PublicKey;
     let kaminoCollateralVaultPda: PublicKey;
     let kaminoLpMintPda: PublicKey;
+    let kaminoDepositAccountPda: PublicKey;
 
     before(async () => {
       [kaminoMarketPda] = PublicKey.findProgramAddressSync(
@@ -286,6 +320,21 @@ describe("anemone", () => {
         program.programId
       );
 
+      [kaminoDepositAccountPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("kamino_deposit"), kaminoMarketPda.toBuffer()],
+        program.programId
+      );
+
+      // Create fake collateral mint for this test market
+      await createMint(
+        provider.connection,
+        (authority as any).payer,
+        authority.publicKey,
+        null,
+        6,
+        kaminoTestCollateralMint,
+      );
+
       // Create market pointing to real Kamino USDC Reserve
       await program.methods
         .createMarket(
@@ -301,6 +350,8 @@ describe("anemone", () => {
           lpVault: kaminoLpVaultPda,
           collateralVault: kaminoCollateralVaultPda,
           lpMint: kaminoLpMintPda,
+          kaminoDepositAccount: kaminoDepositAccountPda,
+          kaminoCollateralMint: kaminoTestCollateralMint.publicKey,
           underlyingReserve: KAMINO_USDC_RESERVE,
           underlyingProtocol: KAMINO_PROGRAM_ID,
           underlyingMint: underlyingMint.publicKey,
@@ -354,6 +405,198 @@ describe("anemone", () => {
         assert.fail("Should have thrown");
       } catch (err) {
         console.log("Wrong reserve correctly rejected ✓");
+      }
+    });
+  });
+
+  describe("deposit_liquidity & request_withdrawal", () => {
+    const DEPOSIT_AMOUNT = 10_000_000_000; // 10,000 USDC (6 decimals)
+    let depositorTokenAccount: PublicKey;
+    let depositorLpTokenAccount: PublicKey;
+    let lpPositionPda: PublicKey;
+
+    before(async () => {
+      // Derive LP position PDA
+      [lpPositionPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("lp"), authority.publicKey.toBuffer(), marketPda.toBuffer()],
+        program.programId
+      );
+
+      // Create depositor's USDC token account and mint tokens
+      depositorTokenAccount = await createAccount(
+        provider.connection,
+        (authority as any).payer,
+        underlyingMint.publicKey,
+        authority.publicKey,
+      );
+
+      await mintTo(
+        provider.connection,
+        (authority as any).payer,
+        underlyingMint.publicKey,
+        depositorTokenAccount,
+        authority.publicKey,
+        DEPOSIT_AMOUNT * 2, // Extra for second deposit
+      );
+
+      // Create depositor's LP token account
+      depositorLpTokenAccount = await createAccount(
+        provider.connection,
+        (authority as any).payer,
+        lpMintPda,
+        authority.publicKey,
+      );
+
+      console.log("LP test accounts created ✓");
+    });
+
+    it("deposits 10,000 USDC and receives 1:1 shares", async () => {
+      const tx = await program.methods
+        .depositLiquidity(new anchor.BN(DEPOSIT_AMOUNT))
+        .accountsStrict({
+          market: marketPda,
+          lpPosition: lpPositionPda,
+          lpVault: lpVaultPda,
+          lpMint: lpMintPda,
+          underlyingMint: underlyingMint.publicKey,
+          depositorTokenAccount: depositorTokenAccount,
+          depositorLpTokenAccount: depositorLpTokenAccount,
+          depositor: authority.publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+
+      console.log("deposit_liquidity tx:", tx);
+
+      // Verify market state
+      const market = await program.account.swapMarket.fetch(marketPda);
+      assert.equal(market.totalLpDeposits.toNumber(), DEPOSIT_AMOUNT);
+      assert.equal(market.totalLpShares.toNumber(), DEPOSIT_AMOUNT);
+
+      // Verify LP position
+      const lpPos = await program.account.lpPosition.fetch(lpPositionPda);
+      assert.equal(lpPos.shares.toNumber(), DEPOSIT_AMOUNT);
+      assert.equal(lpPos.depositedAmount.toNumber(), DEPOSIT_AMOUNT);
+      assert.equal(lpPos.owner.toBase58(), authority.publicKey.toBase58());
+
+      // Verify LP tokens received
+      const lpAccount = await getAccount(provider.connection, depositorLpTokenAccount);
+      assert.equal(Number(lpAccount.amount), DEPOSIT_AMOUNT);
+
+      // Verify vault received USDC
+      const vaultAccount = await getAccount(provider.connection, lpVaultPda);
+      assert.equal(Number(vaultAccount.amount), DEPOSIT_AMOUNT);
+
+      console.log("First deposit: 10,000 USDC -> 10,000 shares ✓");
+    });
+
+    it("second deposit gets proportional shares", async () => {
+      const secondAmount = 5_000_000_000; // 5,000 USDC
+
+      await program.methods
+        .depositLiquidity(new anchor.BN(secondAmount))
+        .accountsStrict({
+          market: marketPda,
+          lpPosition: lpPositionPda,
+          lpVault: lpVaultPda,
+          lpMint: lpMintPda,
+          underlyingMint: underlyingMint.publicKey,
+          depositorTokenAccount: depositorTokenAccount,
+          depositorLpTokenAccount: depositorLpTokenAccount,
+          depositor: authority.publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+
+      // Pool: 10K deposits / 10K shares. Depositing 5K → 5K shares (1:1, no yield yet)
+      const market = await program.account.swapMarket.fetch(marketPda);
+      assert.equal(market.totalLpDeposits.toNumber(), DEPOSIT_AMOUNT + secondAmount);
+      assert.equal(market.totalLpShares.toNumber(), DEPOSIT_AMOUNT + secondAmount);
+
+      const lpPos = await program.account.lpPosition.fetch(lpPositionPda);
+      assert.equal(lpPos.shares.toNumber(), DEPOSIT_AMOUNT + secondAmount);
+
+      console.log("Second deposit: 5,000 USDC -> 5,000 shares (proportional) ✓");
+    });
+
+    it("withdraws 50% of shares with fee to treasury", async () => {
+      const totalShares = DEPOSIT_AMOUNT + 5_000_000_000; // 15,000 USDC
+      const sharesToBurn = Math.floor(totalShares / 2); // 7,500
+
+      // Create treasury token account using treasury keypair so address matches protocol_state.treasury
+      const treasuryTokenAccount = await createAccount(
+        provider.connection,
+        (authority as any).payer,
+        underlyingMint.publicKey,
+        authority.publicKey,
+        treasury, // keypair → address = treasury.publicKey
+      );
+
+      const balanceBefore = await getAccount(provider.connection, depositorTokenAccount);
+
+      await program.methods
+        .requestWithdrawal(new anchor.BN(sharesToBurn))
+        .accountsStrict({
+          protocolState: protocolStatePda,
+          market: marketPda,
+          lpPosition: lpPositionPda,
+          lpVault: lpVaultPda,
+          lpMint: lpMintPda,
+          underlyingMint: underlyingMint.publicKey,
+          withdrawerLpTokenAccount: depositorLpTokenAccount,
+          withdrawerTokenAccount: depositorTokenAccount,
+          treasury: treasury.publicKey,
+          withdrawer: authority.publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .rpc();
+
+      // Verify market state
+      const market = await program.account.swapMarket.fetch(marketPda);
+      assert.equal(market.totalLpShares.toNumber(), totalShares - sharesToBurn);
+      assert.equal(market.totalLpDeposits.toNumber(), totalShares - sharesToBurn);
+
+      // Verify LP position
+      const lpPos = await program.account.lpPosition.fetch(lpPositionPda);
+      assert.equal(lpPos.shares.toNumber(), totalShares - sharesToBurn);
+
+      // Verify USDC returned (minus 0.05% fee)
+      const balanceAfter = await getAccount(provider.connection, depositorTokenAccount);
+      const received = Number(balanceAfter.amount) - Number(balanceBefore.amount);
+      const expectedFee = Math.floor(sharesToBurn * 5 / 10000); // 0.05%
+      const expectedNet = sharesToBurn - expectedFee;
+      assert.approximately(received, expectedNet, 1);
+
+      // Verify treasury got the fee
+      const treasuryAccount = await getAccount(provider.connection, treasury.publicKey);
+      assert.equal(Number(treasuryAccount.amount), expectedFee);
+
+      console.log(`Withdrawal: ${sharesToBurn} shares -> ${received} USDC (fee: ${expectedFee}) ✓`);
+    });
+
+    it("rejects withdrawal with insufficient shares", async () => {
+      try {
+        await program.methods
+          .requestWithdrawal(new anchor.BN(999_999_999_999))
+          .accountsStrict({
+            protocolState: protocolStatePda,
+            market: marketPda,
+            lpPosition: lpPositionPda,
+            lpVault: lpVaultPda,
+            lpMint: lpMintPda,
+            underlyingMint: underlyingMint.publicKey,
+            withdrawerLpTokenAccount: depositorLpTokenAccount,
+            withdrawerTokenAccount: depositorTokenAccount,
+            treasury: treasury.publicKey,
+            withdrawer: authority.publicKey,
+            tokenProgram: TOKEN_PROGRAM_ID,
+          })
+          .rpc();
+        assert.fail("Should have thrown");
+      } catch (err) {
+        console.log("Insufficient shares correctly rejected ✓");
       }
     });
   });
