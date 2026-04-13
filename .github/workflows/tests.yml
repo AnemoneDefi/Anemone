@@ -56,7 +56,9 @@ jobs:
           key: sbf-tools-${{ env.SBF_TOOLS_VERSION }}
 
       - name: Install SBF platform-tools ${{ env.SBF_TOOLS_VERSION }}
-        run: cargo-build-sbf --tools-version ${{ env.SBF_TOOLS_VERSION }} --install-only
+        run: |
+          export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
+          cargo-build-sbf --tools-version ${{ env.SBF_TOOLS_VERSION }} --install-only
 
       - name: Cache Anchor CLI ${{ env.ANCHOR_VERSION }}
         id: cache-anchor
@@ -96,7 +98,9 @@ jobs:
         run: yarn ts-node tests/scripts/patch_usdc_mint.ts
 
       - name: Build program (cargo-build-sbf)
-        run: cargo-build-sbf --tools-version ${{ env.SBF_TOOLS_VERSION }}
+        run: |
+          export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
+          cargo-build-sbf --tools-version ${{ env.SBF_TOOLS_VERSION }}
 
       - name: Generate IDL
         run: |
