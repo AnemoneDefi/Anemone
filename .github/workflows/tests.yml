@@ -41,7 +41,14 @@ jobs:
       - name: Install Solana CLI (Agave ${{ env.SOLANA_VERSION }})
         run: |
           sh -c "$(curl -sSfL https://release.anza.xyz/${{ env.SOLANA_VERSION }}/install)"
-          echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+          # Agave 3.x installs to ~/.local/share/agave/; older versions used solana/
+          INSTALL_BIN=$(find "$HOME/.local/share" -maxdepth 4 -name "cargo-build-sbf" 2>/dev/null | head -1 | xargs dirname 2>/dev/null)
+          if [ -z "$INSTALL_BIN" ]; then
+            INSTALL_BIN="$HOME/.local/share/solana/install/active_release/bin"
+          fi
+          echo "Solana bin dir: $INSTALL_BIN"
+          echo "$INSTALL_BIN" >> $GITHUB_PATH
+          echo "SOLANA_BIN=$INSTALL_BIN" >> $GITHUB_ENV
 
       # Platform-tools v1.52 (rustc 1.89) required for edition2024 deps.
       # anchor build calls cargo-build-sbf in a way that tries to reinstall the
@@ -56,9 +63,7 @@ jobs:
           key: sbf-tools-${{ env.SBF_TOOLS_VERSION }}
 
       - name: Install SBF platform-tools ${{ env.SBF_TOOLS_VERSION }}
-        run: |
-          export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
-          cargo-build-sbf --tools-version ${{ env.SBF_TOOLS_VERSION }} --install-only
+        run: cargo-build-sbf --tools-version ${{ env.SBF_TOOLS_VERSION }} --install-only
 
       - name: Cache Anchor CLI ${{ env.ANCHOR_VERSION }}
         id: cache-anchor
@@ -98,9 +103,7 @@ jobs:
         run: yarn ts-node tests/scripts/patch_usdc_mint.ts
 
       - name: Build program (cargo-build-sbf)
-        run: |
-          export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
-          cargo-build-sbf --tools-version ${{ env.SBF_TOOLS_VERSION }}
+        run: cargo-build-sbf --tools-version ${{ env.SBF_TOOLS_VERSION }}
 
       - name: Generate IDL
         run: |
