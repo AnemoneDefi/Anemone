@@ -6,7 +6,7 @@ on:
   pull_request:
 
 env:
-  SOLANA_VERSION: "v3.0.15"
+  SOLANA_VERSION: "v3.1.13"
   ANCHOR_VERSION: "0.31.1"
   SBF_TOOLS_VERSION: "v1.52"
 
