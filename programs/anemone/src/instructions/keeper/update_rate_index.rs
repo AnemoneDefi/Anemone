@@ -1,5 +1,4 @@
 use anchor_lang::prelude::*;
-use kamino_lend::Reserve;
 use crate::state::SwapMarket;
 use crate::helpers::read_kamino_rate_index;
 use crate::errors::AnemoneError;
@@ -13,12 +12,15 @@ pub struct UpdateRateIndex<'info> {
     )]
     pub market: Account<'info, SwapMarket>,
 
-    /// Kamino Reserve account — must match what the market was created with.
+    /// Kamino Reserve account — read-only, raw bytes.
+    /// Must match the reserve this market was created with.
+    /// CHECK: We read raw bytes at the known offset for cumulative_borrow_rate_bsf.
+    ///        The address is validated against market.underlying_reserve.
     #[account(
         constraint = kamino_reserve.key() == market.underlying_reserve
             @ AnemoneError::InvalidReserve
     )]
-    pub kamino_reserve: AccountLoader<'info, Reserve>,
+    pub kamino_reserve: AccountInfo<'info>,
 }
 
 pub fn handle_update_rate_index(ctx: Context<UpdateRateIndex>) -> Result<()> {

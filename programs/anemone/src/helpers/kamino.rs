@@ -1,18 +1,46 @@
 use anchor_lang::prelude::*;
-use kamino_lend::Reserve;
 use crate::errors::AnemoneError;
 
-/// Reads the cumulative borrow rate index from a Kamino Reserve account.
-/// Returns the rate index as u128 (scaled fraction, first 128 bits of the 256-bit value).
-pub fn read_kamino_rate_index(reserve_loader: &AccountLoader<Reserve>) -> Result<u128> {
-    let reserve = reserve_loader.load()?;
-    let bsf = &reserve.liquidity.cumulative_borrow_rate_bsf;
+/// Byte offset of `liquidity.cumulative_borrow_rate_bsf` within a Kamino Reserve account.
+///
+/// Layout verified against mainnet Kamino USDC Reserve fixture using decode_reserve.ts.
+/// The field is a BigFractionBytes = [u64; 4] (32 bytes, little-endian).
+///
+/// Offset 296 = 8 (discriminator) + layout of all preceding fields.
+/// Only value[0] and value[1] (lower 128 bits) are used for rate calculations.
+const CUMULATIVE_BORROW_RATE_OFFSET: usize = 296;
 
-    // BigFractionBytes.value is [u64; 4] representing a 256-bit number in little-endian.
-    // We take the lower 128 bits (value[0] and value[1]) which gives us
-    // the rate index with sufficient precision for our calculations.
-    let lower = bsf.value[0] as u128;
-    let upper = (bsf.value[1] as u128) << 64;
+/// Reads the cumulative borrow rate index from a Kamino Reserve account.
+///
+/// Reads the BigFractionBytes value directly from raw account data at the known
+/// byte offset, avoiding a dependency on the kamino-lend crate which has
+/// borsh/rustc compatibility issues.
+///
+/// Returns the lower 128 bits (value[0] | value[1] << 64) as u128.
+pub fn read_kamino_rate_index(reserve_info: &AccountInfo) -> Result<u128> {
+    let data = reserve_info.try_borrow_data()?;
+
+    let min_len = CUMULATIVE_BORROW_RATE_OFFSET + 16; // we need value[0] + value[1]
+    require!(data.len() >= min_len, AnemoneError::InvalidRateIndex);
+
+    let offset = CUMULATIVE_BORROW_RATE_OFFSET;
+
+    // value[0]: bytes [offset..offset+8], little-endian u64
+    let v0 = u64::from_le_bytes(
+        data[offset..offset + 8]
+            .try_into()
+            .map_err(|_| AnemoneError::MathOverflow)?,
+    );
+
+    // value[1]: bytes [offset+8..offset+16], little-endian u64
+    let v1 = u64::from_le_bytes(
+        data[offset + 8..offset + 16]
+            .try_into()
+            .map_err(|_| AnemoneError::MathOverflow)?,
+    );
+
+    let lower = v0 as u128;
+    let upper = (v1 as u128) << 64;
 
     Ok(lower | upper)
 }
@@ -59,7 +87,6 @@ pub fn calculate_current_apy_from_index(
         .ok_or(AnemoneError::MathOverflow)?;
 
     // Term 2: n * (n - PRECISION) * r² / (2 * PRECISION³)
-    // Simplified: (n * (n - PRECISION) / PRECISION) * (r * r / PRECISION) / (2 * PRECISION)
     let n_minus_1 = n.saturating_sub(PRECISION);
     let r_squared = r.checked_mul(r)
         .and_then(|v| v.checked_div(PRECISION))
@@ -73,7 +100,6 @@ pub fn calculate_current_apy_from_index(
         .ok_or(AnemoneError::MathOverflow)?;
 
     // Term 3: n * (n-1) * (n-2) * r³ / (6 * PRECISION⁵)
-    // Simplified step by step to avoid overflow
     let n_minus_2 = n.saturating_sub(2 * PRECISION);
     let r_cubed = r_squared.checked_mul(r)
         .and_then(|v| v.checked_div(PRECISION))
@@ -88,8 +114,6 @@ pub fn calculate_current_apy_from_index(
         .and_then(|v| v.checked_div(6))
         .ok_or(AnemoneError::MathOverflow)?;
 
-    // APY = term1 + term2 + term3 (all scaled by PRECISION)
-    // Convert to basis points: * BPS_SCALE / PRECISION
     let apy_scaled = term1
         .checked_add(term2)
         .and_then(|v| v.checked_add(term3))
@@ -117,35 +141,30 @@ mod tests {
 
     #[test]
     fn calm_market_005_pct_in_7_days() {
-        // 0.05% growth in 7 days → expected ~2.62% APY (262 bps)
         let result = calculate_current_apy_from_index(index(1.0), index(1.0005), SEVEN_DAYS).unwrap();
         assert!(result >= 257 && result <= 267, "Expected ~262 bps, got {} bps", result);
     }
 
     #[test]
     fn normal_market_02_pct_in_7_days() {
-        // 0.2% growth in 7 days → expected ~10.95% APY (1095 bps)
         let result = calculate_current_apy_from_index(index(1.0), index(1.002), SEVEN_DAYS).unwrap();
         assert!(result >= 1085 && result <= 1105, "Expected ~1095 bps, got {} bps", result);
     }
 
     #[test]
     fn hot_market_05_pct_in_7_days() {
-        // 0.5% growth in 7 days → expected ~29.64% APY (2964 bps)
         let result = calculate_current_apy_from_index(index(1.0), index(1.005), SEVEN_DAYS).unwrap();
         assert!(result >= 2930 && result <= 2980, "Expected ~2964 bps, got {} bps", result);
     }
 
     #[test]
     fn extreme_market_1_pct_in_7_days() {
-        // 1% growth in 7 days → expected ~68.00% APY (6800 bps)
         let result = calculate_current_apy_from_index(index(1.0), index(1.01), SEVEN_DAYS).unwrap();
         assert!(result >= 6750 && result <= 6850, "Expected ~6800 bps, got {} bps", result);
     }
 
     #[test]
     fn moderate_growth_1_pct_in_30_days() {
-        // 1% growth in 30 days → expected ~12.81% APY (1281 bps)
         let result = calculate_current_apy_from_index(index(1.0), index(1.01), THIRTY_DAYS).unwrap();
         assert!(result >= 1270 && result <= 1295, "Expected ~1281 bps, got {} bps", result);
     }
@@ -168,4 +187,3 @@ mod tests {
         assert!(result.is_err(), "Should reject decreasing rate index");
     }
 }
-

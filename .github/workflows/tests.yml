@@ -1,0 +1,107 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  SOLANA_VERSION: "v3.0.15"
+  ANCHOR_VERSION: "0.31.1"
+  SBF_TOOLS_VERSION: "v1.52"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Rust toolchain is read from rust-toolchain.toml (1.89.0)
+      - name: Setup Rust toolchain
+        run: rustup show
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: cargo-registry-
+
+      - name: Cache program build artifacts
+        uses: actions/cache@v4
+        with:
+          path: target/
+          key: cargo-target-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', 'programs/**/*.rs') }}
+          restore-keys: cargo-target-${{ runner.os }}-
+
+      - name: Install Solana CLI (Agave ${{ env.SOLANA_VERSION }})
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/${{ env.SOLANA_VERSION }}/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+
+      # Platform-tools v1.52 (rustc 1.89) required for edition2024 deps.
+      # anchor build calls cargo-build-sbf in a way that tries to reinstall the
+      # toolchain using the host cargo (1.84), which fails. Workaround: build
+      # manually and run `anchor test --skip-build`.
+      - name: Cache SBF platform-tools ${{ env.SBF_TOOLS_VERSION }}
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/solana/${{ env.SBF_TOOLS_VERSION }}
+            ~/.rustup/toolchains/1.89.0-sbpf-solana-${{ env.SBF_TOOLS_VERSION }}
+          key: sbf-tools-${{ env.SBF_TOOLS_VERSION }}
+
+      - name: Install SBF platform-tools ${{ env.SBF_TOOLS_VERSION }}
+        run: cargo-build-sbf --tools-version ${{ env.SBF_TOOLS_VERSION }} --install-only
+
+      - name: Cache Anchor CLI ${{ env.ANCHOR_VERSION }}
+        id: cache-anchor
+        uses: actions/cache@v4
+        with:
+          path: ~/.avm
+          key: anchor-avm-${{ env.ANCHOR_VERSION }}
+
+      - name: Install Anchor CLI ${{ env.ANCHOR_VERSION }}
+        if: steps.cache-anchor.outputs.cache-hit != 'true'
+        run: |
+          cargo install --git https://github.com/coral-xyz/avm avm --locked --force
+          ~/.cargo/bin/avm install ${{ env.ANCHOR_VERSION }}
+          ~/.cargo/bin/avm use ${{ env.ANCHOR_VERSION }}
+
+      - name: Add Anchor to PATH
+        run: echo "$HOME/.avm/bin" >> $GITHUB_PATH
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "yarn"
+
+      - name: Install JS dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: Generate Solana keypair
+        run: |
+          mkdir -p ~/.config/solana
+          solana-keygen new --no-bip39-passphrase -o ~/.config/solana/id.json
+          solana config set --url localhost
+
+      # Re-patch the USDC mint fixture so mintAuthority matches the CI wallet.
+      # The raw dump (usdc_mint.json) is committed; only the authority bytes change.
+      - name: Patch USDC mint authority to CI wallet
+        run: yarn ts-node tests/scripts/patch_usdc_mint.ts
+
+      - name: Build program (cargo-build-sbf)
+        run: cargo-build-sbf --tools-version ${{ env.SBF_TOOLS_VERSION }}
+
+      - name: Generate IDL
+        run: |
+          mkdir -p target/idl
+          anchor idl build -o target/idl/anemone.json
+
+      - name: Run tests
+        run: anchor test --skip-build

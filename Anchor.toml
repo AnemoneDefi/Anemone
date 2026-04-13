@@ -16,11 +16,42 @@ cluster = "localnet"
 wallet = "~/.config/solana/id.json"
 
 [test.validator]
+url = "https://api.mainnet-beta.solana.com"
 bind_address = "127.0.0.1"
 
+# Kamino K-Lend program — bytecode clonado de mainnet
+[[test.validator.clone]]
+address = "KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD"
+
+# Kamino Lending Market state
+[[test.validator.clone]]
+address = "7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF"
+
+# kUSDC Mint (extraído da Reserve via decode_reserve.ts)
+[[test.validator.clone]]
+address = "B8V6WVjPxW1UGwVDfxH2d2r8SyT4cqn7dQRK6XneVa7D"
+
+# USDC Supply Vault do Kamino (extraído da Reserve via decode_reserve.ts)
+[[test.validator.clone]]
+address = "Bgq7trRgVMeq33yt235zM2onQ4bRDBsY5EWiTetF4qw6"
+
+# Fee Vault do Kamino (extraído da Reserve via decode_reserve.ts)
+[[test.validator.clone]]
+address = "BbDUrk1bVtSixgQsPLBJFZEF7mwGstnD5joA1WzYvYFX"
+
+# USDC Reserve — fixture estático com dados reais de mainnet
 [[test.validator.account]]
 address = "D6q6wuQSrifJKZYpR1M8R4YawnLDtDsMmWM1NbBmgJ59"
 filename = "tests/fixtures/kamino_usdc_reserve.json"
 
+# USDC Mint — dump de mainnet com mintAuthority patchada pro test wallet
+# Gerado por: yarn ts-node tests/scripts/patch_usdc_mint.ts
+[[test.validator.account]]
+address = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+filename = "tests/fixtures/usdc_mint_patched.json"
+
+[test]
+startup_wait = 60000
+
 [scripts]
-test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 \"tests/**/*.ts\""
+test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 \"tests/*.ts\""
