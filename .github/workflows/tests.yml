@@ -62,18 +62,12 @@ jobs:
         id: cache-anchor
         uses: actions/cache@v4
         with:
-          path: ~/.avm
-          key: anchor-avm-${{ env.ANCHOR_VERSION }}
+          path: ~/.cargo/bin/anchor
+          key: anchor-cli-${{ env.ANCHOR_VERSION }}
 
       - name: Install Anchor CLI ${{ env.ANCHOR_VERSION }}
         if: steps.cache-anchor.outputs.cache-hit != 'true'
-        run: |
-          cargo install avm --force
-          ~/.cargo/bin/avm install ${{ env.ANCHOR_VERSION }}
-          ~/.cargo/bin/avm use ${{ env.ANCHOR_VERSION }}
-
-      - name: Add Anchor to PATH
-        run: echo "$HOME/.avm/bin" >> $GITHUB_PATH
+        run: cargo install anchor-cli --version ${{ env.ANCHOR_VERSION }} --force
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
