@@ -1,5 +1,5 @@
 use anchor_lang::prelude::*;
-use kamino_lend::Reserve;
+use kamino_lend::state::Reserve;
 use crate::errors::AnemoneError;
 
 /// Reads the cumulative borrow rate index from a Kamino Reserve account.
