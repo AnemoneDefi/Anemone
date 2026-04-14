@@ -44,16 +44,6 @@ address = "BbDUrk1bVtSixgQsPLBJFZEF7mwGstnD5joA1WzYvYFX"
 address = "D6q6wuQSrifJKZYpR1M8R4YawnLDtDsMmWM1NbBmgJ59"
 filename = "tests/fixtures/kamino_usdc_reserve.json"
 
-<<<<<<< HEAD
-# USDC Mint — dump de mainnet com mintAuthority patchada pro test wallet
-# Gerado por: yarn ts-node tests/scripts/patch_usdc_mint.ts
-[[test.validator.account]]
-address = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
-filename = "tests/fixtures/usdc_mint_patched.json"
-
-[test]
-startup_wait = 60000
-=======
 # Kamino LendingMarket
 [[test.validator.account]]
 address = "7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF"
@@ -74,11 +64,14 @@ filename = "tests/fixtures/kamino_liquidity_supply.json"
 address = "3DzjXRfxRm6iejfyyMynR4tScddaanrePJ1NJU2XnPPL"
 filename = "tests/fixtures/kamino_collateral_mint.json"
 
-# USDC mint (mainnet)
+# USDC Mint — dump de mainnet com mintAuthority patchada pro test wallet
+# Gerado por: yarn ts-node tests/scripts/patch_usdc_mint.ts
 [[test.validator.account]]
 address = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
-filename = "tests/fixtures/usdc_mint.json"
->>>>>>> main
+filename = "tests/fixtures/usdc_mint_patched.json"
+
+[test]
+startup_wait = 60000
 
 [scripts]
 test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 \"tests/*.ts\""
