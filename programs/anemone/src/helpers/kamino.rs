@@ -33,6 +33,11 @@ pub fn calculate_current_apy_from_index(
     require!(previous_rate_index > 0, AnemoneError::InvalidRateIndex);
     require!(current_rate_index >= previous_rate_index, AnemoneError::InvalidRateIndex);
 
+    // Zero growth → 0 APY (also avoids overflow in Taylor terms when elapsed is small)
+    if current_rate_index == previous_rate_index {
+        return Ok(0);
+    }
+
     const SECONDS_PER_YEAR: u128 = 31_536_000;
     const PRECISION: u128 = 1_000_000_000; // 10^9 for fixed-point math
     const BPS_SCALE: u128 = 10_000;

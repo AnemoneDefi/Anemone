@@ -104,7 +104,7 @@ describe("anemone", () => {
       const tx = await program.methods
         .initializeProtocol(
           1000, // protocol_fee_bps = 10%
-          20,   // opening_fee_bps = 0.2%
+          5,    // opening_fee_bps = 0.05%
           300,  // liquidation_fee_bps = 3%
           5,    // withdrawal_fee_bps = 0.05%
           500,  // early_close_fee_bps = 5%
@@ -125,7 +125,7 @@ describe("anemone", () => {
       assert.equal(state.treasury.toBase58(), treasury.publicKey.toBase58());
       assert.equal(state.totalMarkets.toNumber(), 0);
       assert.equal(state.protocolFeeBps, 1000);
-      assert.equal(state.openingFeeBps, 20);
+      assert.equal(state.openingFeeBps, 5);
       assert.equal(state.liquidationFeeBps, 300);
       assert.equal(state.withdrawalFeeBps, 5);
       assert.equal(state.earlyCloseFeeBps, 500);
@@ -136,7 +136,7 @@ describe("anemone", () => {
     it("fails if called twice (PDA already exists)", async () => {
       try {
         await program.methods
-          .initializeProtocol(1000, 20, 300, 5, 500)
+          .initializeProtocol(1000, 5, 300, 5, 500)
           .accountsStrict({
             protocolState: protocolStatePda,
             authority: authority.publicKey,
@@ -158,7 +158,7 @@ describe("anemone", () => {
           TENOR_SECONDS,
           new anchor.BN(86_400),
           6000,
-          50,
+          80,
           20,
         )
         .accountsStrict({
@@ -191,7 +191,7 @@ describe("anemone", () => {
       assert.equal(market.tenorSeconds.toNumber(), 2_592_000);
       assert.equal(market.settlementPeriodSeconds.toNumber(), 86_400);
       assert.equal(market.maxUtilizationBps, 6000);
-      assert.equal(market.baseSpreadBps, 50);
+      assert.equal(market.baseSpreadBps, 80);
       assert.equal(market.maxLeverage, 20);
       assert.equal(market.totalLpDeposits.toNumber(), 0);
       assert.equal(market.totalLpShares.toNumber(), 0);
@@ -258,7 +258,7 @@ describe("anemone", () => {
             TENOR_SECONDS,
             new anchor.BN(86_400),
             6000,
-            50,
+            80,
             20,
           )
           .accountsStrict({
@@ -341,7 +341,7 @@ describe("anemone", () => {
           KAMINO_TENOR,
           new anchor.BN(86_400),
           6000,
-          50,
+          80,
           20,
         )
         .accountsStrict({
@@ -597,6 +597,417 @@ describe("anemone", () => {
         assert.fail("Should have thrown");
       } catch (err) {
         console.log("Insufficient shares correctly rejected ✓");
+      }
+    });
+  });
+
+  describe("open_swap", () => {
+    // We use the Kamino test market (real reserve) so update_rate_index works.
+    // We need: LP deposits + two rate index updates (previous + current).
+    const KAMINO_TENOR = new anchor.BN(604_800); // 7 days
+    const kaminoTestCollateralMint = Keypair.generate();
+    let swapMarketPda: PublicKey;
+    let swapLpVaultPda: PublicKey;
+    let swapCollateralVaultPda: PublicKey;
+    let swapLpMintPda: PublicKey;
+    let swapKaminoDepositPda: PublicKey;
+    let swapLpPositionPda: PublicKey;
+
+    let traderTokenAccount: PublicKey;
+    let traderLpTokenAccount: PublicKey;
+    // Treasury token account (reuse treasury keypair from protocol init)
+    let swapTreasuryTokenAccount: PublicKey;
+
+    const LP_DEPOSIT = 100_000_000_000; // $100,000 USDC
+    const SWAP_NOTIONAL = 10_000_000_000; // $10,000 USDC
+
+    before(async () => {
+      // Create unique reserve and mint for this test market
+      const swapReserve = KAMINO_USDC_RESERVE; // real Kamino reserve for rate reading
+
+      [swapMarketPda] = PublicKey.findProgramAddressSync(
+        [
+          Buffer.from("market"),
+          swapReserve.toBuffer(),
+          KAMINO_TENOR.toArrayLike(Buffer, "le", 8),
+        ],
+        program.programId
+      );
+
+      [swapLpVaultPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("lp_vault"), swapMarketPda.toBuffer()],
+        program.programId
+      );
+
+      [swapCollateralVaultPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("collateral_vault"), swapMarketPda.toBuffer()],
+        program.programId
+      );
+
+      [swapLpMintPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("lp_mint"), swapMarketPda.toBuffer()],
+        program.programId
+      );
+
+      [swapKaminoDepositPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("kamino_deposit"), swapMarketPda.toBuffer()],
+        program.programId
+      );
+
+      [swapLpPositionPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("lp"), authority.publicKey.toBuffer(), swapMarketPda.toBuffer()],
+        program.programId
+      );
+
+      // Create collateral mint for this market
+      await createMint(
+        provider.connection,
+        (authority as any).payer,
+        authority.publicKey,
+        null,
+        6,
+        kaminoTestCollateralMint,
+      );
+
+      // Check if this market already exists (from update_rate_index tests)
+      const marketInfo = await provider.connection.getAccountInfo(swapMarketPda);
+      if (!marketInfo) {
+        // Create market pointing to real Kamino reserve
+        await program.methods
+          .createMarket(
+            KAMINO_TENOR,
+            new anchor.BN(86_400), // 1 day settlement period
+            6000, // 60% max utilization
+            80,   // 0.8% base spread
+            20,   // max leverage
+          )
+          .accountsStrict({
+            protocolState: protocolStatePda,
+            market: swapMarketPda,
+            lpVault: swapLpVaultPda,
+            collateralVault: swapCollateralVaultPda,
+            lpMint: swapLpMintPda,
+            kaminoDepositAccount: swapKaminoDepositPda,
+            kaminoCollateralMint: kaminoTestCollateralMint.publicKey,
+            underlyingReserve: swapReserve,
+            underlyingProtocol: KAMINO_PROGRAM_ID,
+            underlyingMint: underlyingMint.publicKey,
+            authority: authority.publicKey,
+            systemProgram: SystemProgram.programId,
+            tokenProgram: TOKEN_PROGRAM_ID,
+          })
+          .rpc();
+      }
+
+      // Deposit LP liquidity so utilization check passes
+      // Use explicit keypairs to avoid ATA collisions with earlier tests
+      const traderTokenKp = Keypair.generate();
+      traderTokenAccount = await createAccount(
+        provider.connection,
+        (authority as any).payer,
+        underlyingMint.publicKey,
+        authority.publicKey,
+        traderTokenKp,
+      );
+
+      // Mint enough for LP deposit + swap collateral + fees
+      await mintTo(
+        provider.connection,
+        (authority as any).payer,
+        underlyingMint.publicKey,
+        traderTokenAccount,
+        authority.publicKey,
+        LP_DEPOSIT + SWAP_NOTIONAL, // plenty for both
+      );
+
+      const traderLpTokenKp = Keypair.generate();
+      traderLpTokenAccount = await createAccount(
+        provider.connection,
+        (authority as any).payer,
+        swapLpMintPda,
+        authority.publicKey,
+        traderLpTokenKp,
+      );
+
+      // Deposit $100k as LP
+      await program.methods
+        .depositLiquidity(new anchor.BN(LP_DEPOSIT))
+        .accountsStrict({
+          market: swapMarketPda,
+          lpPosition: swapLpPositionPda,
+          lpVault: swapLpVaultPda,
+          lpMint: swapLpMintPda,
+          underlyingMint: underlyingMint.publicKey,
+          depositorTokenAccount: traderTokenAccount,
+          depositorLpTokenAccount: traderLpTokenAccount,
+          depositor: authority.publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+
+      console.log("LP deposited $100k ✓");
+
+      // Update rate index TWICE to populate both previous and current
+      await program.methods
+        .updateRateIndex()
+        .accountsStrict({
+          market: swapMarketPda,
+          kaminoReserve: KAMINO_USDC_RESERVE,
+        })
+        .rpc();
+
+      // Small delay then second update to rotate
+      await program.methods
+        .updateRateIndex()
+        .accountsStrict({
+          market: swapMarketPda,
+          kaminoReserve: KAMINO_USDC_RESERVE,
+        })
+        .rpc();
+
+      console.log("Rate index updated twice (previous + current) ✓");
+
+      // Create treasury token account for this underlying mint
+      // The treasury address is treasury.publicKey (the Keypair from above)
+      const treasuryInfo = await provider.connection.getAccountInfo(treasury.publicKey);
+      if (!treasuryInfo || treasuryInfo.data.length < 165) {
+        // Treasury might already exist from withdrawal tests with a different mint
+        // Create a new ATA-style account
+        swapTreasuryTokenAccount = await createAccount(
+          provider.connection,
+          (authority as any).payer,
+          underlyingMint.publicKey,
+          authority.publicKey,
+          treasury, // keypair → address = treasury.publicKey
+        );
+      } else {
+        swapTreasuryTokenAccount = treasury.publicKey;
+      }
+
+      console.log("Open swap test setup complete ✓");
+    });
+
+    it("opens a PayFixed swap with correct parameters", async () => {
+      const nonce = 0;
+      const [swapPositionPda] = PublicKey.findProgramAddressSync(
+        [
+          Buffer.from("swap"),
+          authority.publicKey.toBuffer(),
+          swapMarketPda.toBuffer(),
+          Buffer.from([nonce]),
+        ],
+        program.programId
+      );
+
+      const balanceBefore = await getAccount(provider.connection, traderTokenAccount);
+      const collateralVaultBefore = await getAccount(provider.connection, swapCollateralVaultPda);
+      const treasuryBefore = await getAccount(provider.connection, treasury.publicKey);
+
+      const tx = await program.methods
+        .openSwap({ payFixed: {} }, new anchor.BN(SWAP_NOTIONAL), nonce)
+        .accountsStrict({
+          protocolState: protocolStatePda,
+          market: swapMarketPda,
+          swapPosition: swapPositionPda,
+          collateralVault: swapCollateralVaultPda,
+          treasury: treasury.publicKey,
+          underlyingMint: underlyingMint.publicKey,
+          traderTokenAccount: traderTokenAccount,
+          trader: authority.publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+
+      console.log("open_swap (PayFixed) tx:", tx);
+
+      // Verify SwapPosition
+      const position = await program.account.swapPosition.fetch(swapPositionPda);
+      assert.equal(position.owner.toBase58(), authority.publicKey.toBase58());
+      assert.equal(position.market.toBase58(), swapMarketPda.toBase58());
+      assert.deepEqual(position.direction, { payFixed: {} });
+      assert.equal(position.notional.toNumber(), SWAP_NOTIONAL);
+      assert.isTrue(position.fixedRateBps.toNumber() > 0, "Fixed rate should be > 0 (at least spread)");
+      assert.equal(position.leverage, 1);
+      assert.isTrue(position.collateralDeposited.toNumber() > 0, "Margin should be > 0");
+      assert.equal(position.collateralRemaining.toNumber(), position.collateralDeposited.toNumber());
+      assert.isTrue(position.entryRateIndex.gt(new anchor.BN(0)));
+      assert.deepEqual(position.status, { open: {} });
+      assert.equal(position.nonce, nonce);
+      assert.equal(position.numSettlements, 0);
+      assert.equal(position.realizedPnl.toNumber(), 0);
+
+      // Verify collateral transferred to vault
+      const collateralVaultAfter = await getAccount(provider.connection, swapCollateralVaultPda);
+      const marginTransferred = Number(collateralVaultAfter.amount) - Number(collateralVaultBefore.amount);
+      assert.equal(marginTransferred, position.collateralDeposited.toNumber());
+
+      // Verify fee transferred to treasury
+      const treasuryAfter = await getAccount(provider.connection, treasury.publicKey);
+      const feeCollected = Number(treasuryAfter.amount) - Number(treasuryBefore.amount);
+      const expectedFee = Math.floor(SWAP_NOTIONAL * 5 / 10000); // 0.05%
+      assert.equal(feeCollected, expectedFee);
+
+      // Verify market updated
+      const market = await program.account.swapMarket.fetch(swapMarketPda);
+      assert.equal(market.totalFixedNotional.toNumber(), SWAP_NOTIONAL);
+      assert.equal(market.totalVariableNotional.toNumber(), 0);
+      assert.equal(market.totalOpenPositions.toNumber(), 1);
+
+      // Verify trader paid margin + fee
+      const balanceAfter = await getAccount(provider.connection, traderTokenAccount);
+      const totalPaid = Number(balanceBefore.amount) - Number(balanceAfter.amount);
+      assert.equal(totalPaid, position.collateralDeposited.toNumber() + feeCollected);
+
+      console.log(`PayFixed swap opened: notional=$${SWAP_NOTIONAL / 1e6}, rate=${position.fixedRateBps.toNumber()}bps, margin=$${position.collateralDeposited.toNumber() / 1e6}, fee=$${feeCollected / 1e6} ✓`);
+    });
+
+    it("rejects ReceiveFixed when APY < spread (flat rates)", async () => {
+      // With a static reserve fixture, APY = 0, so ReceiveFixed rate would be negative
+      const nonce = 1;
+      const [swapPositionPda] = PublicKey.findProgramAddressSync(
+        [
+          Buffer.from("swap"),
+          authority.publicKey.toBuffer(),
+          swapMarketPda.toBuffer(),
+          Buffer.from([nonce]),
+        ],
+        program.programId
+      );
+
+      try {
+        await program.methods
+          .openSwap({ receiveFixed: {} }, new anchor.BN(SWAP_NOTIONAL), nonce)
+          .accountsStrict({
+            protocolState: protocolStatePda,
+            market: swapMarketPda,
+            swapPosition: swapPositionPda,
+            collateralVault: swapCollateralVaultPda,
+            treasury: treasury.publicKey,
+            underlyingMint: underlyingMint.publicKey,
+            traderTokenAccount: traderTokenAccount,
+            trader: authority.publicKey,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+          })
+          .rpc();
+        assert.fail("Should have rejected ReceiveFixed with APY < spread");
+      } catch (err) {
+        console.log("ReceiveFixed correctly rejected when APY < spread ✓");
+      }
+    });
+
+    it("rejects swap that exceeds max utilization", async () => {
+      // Try to open a swap larger than 60% of LP deposits ($100k * 60% = $60k)
+      // We already have $10k fixed notional, so try $55k more (total = $65k > $60k)
+      const hugeNotional = 55_000_000_000; // $55,000
+      const nonce = 2;
+      const [swapPositionPda] = PublicKey.findProgramAddressSync(
+        [
+          Buffer.from("swap"),
+          authority.publicKey.toBuffer(),
+          swapMarketPda.toBuffer(),
+          Buffer.from([nonce]),
+        ],
+        program.programId
+      );
+
+      // Mint extra for this test
+      await mintTo(
+        provider.connection,
+        (authority as any).payer,
+        underlyingMint.publicKey,
+        traderTokenAccount,
+        authority.publicKey,
+        hugeNotional,
+      );
+
+      try {
+        await program.methods
+          .openSwap({ payFixed: {} }, new anchor.BN(hugeNotional), nonce)
+          .accountsStrict({
+            protocolState: protocolStatePda,
+            market: swapMarketPda,
+            swapPosition: swapPositionPda,
+            collateralVault: swapCollateralVaultPda,
+            treasury: treasury.publicKey,
+            underlyingMint: underlyingMint.publicKey,
+            traderTokenAccount: traderTokenAccount,
+            trader: authority.publicKey,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+          })
+          .rpc();
+        assert.fail("Should have rejected over-utilized swap");
+      } catch (err) {
+        console.log("Over-utilization correctly rejected ✓");
+      }
+    });
+
+    it("rejects swap with insufficient collateral", async () => {
+      // Create a new account with very little USDC
+      const poorTrader = Keypair.generate();
+
+      const sig = await provider.connection.requestAirdrop(
+        poorTrader.publicKey,
+        1_000_000_000,
+      );
+      const latestBlockhash = await provider.connection.getLatestBlockhash();
+      await provider.connection.confirmTransaction({
+        signature: sig,
+        blockhash: latestBlockhash.blockhash,
+        lastValidBlockHeight: latestBlockhash.lastValidBlockHeight,
+      });
+
+      const poorTokenAccount = await createAccount(
+        provider.connection,
+        poorTrader,
+        underlyingMint.publicKey,
+        poorTrader.publicKey,
+      );
+
+      // Mint only 1 USDC — not enough for margin on $10k notional
+      await mintTo(
+        provider.connection,
+        (authority as any).payer,
+        underlyingMint.publicKey,
+        poorTokenAccount,
+        authority.publicKey,
+        1_000_000, // $1
+      );
+
+      const nonce = 0;
+      const [swapPositionPda] = PublicKey.findProgramAddressSync(
+        [
+          Buffer.from("swap"),
+          poorTrader.publicKey.toBuffer(),
+          swapMarketPda.toBuffer(),
+          Buffer.from([nonce]),
+        ],
+        program.programId
+      );
+
+      try {
+        await program.methods
+          .openSwap({ payFixed: {} }, new anchor.BN(SWAP_NOTIONAL), nonce)
+          .accountsStrict({
+            protocolState: protocolStatePda,
+            market: swapMarketPda,
+            swapPosition: swapPositionPda,
+            collateralVault: swapCollateralVaultPda,
+            treasury: treasury.publicKey,
+            underlyingMint: underlyingMint.publicKey,
+            traderTokenAccount: poorTokenAccount,
+            trader: poorTrader.publicKey,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([poorTrader])
+          .rpc();
+        assert.fail("Should have rejected insufficient collateral");
+      } catch (err) {
+        console.log("Insufficient collateral correctly rejected ✓");
       }
     });
   });

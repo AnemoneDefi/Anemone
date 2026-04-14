@@ -7,7 +7,7 @@ pub struct ProtocolState {
     pub total_markets: u64,
     /// 10% performance fee on LP spread (1000 = 10%)
     pub protocol_fee_bps: u16,
-    /// 0.2% on notional when opening swap (20 = 0.2%)
+    /// 0.05% on notional when opening swap (5 = 0.05%)
     pub opening_fee_bps: u16,
     /// 3% on remaining margin at liquidation (300 = 3%)
     pub liquidation_fee_bps: u16,
