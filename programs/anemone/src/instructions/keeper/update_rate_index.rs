@@ -1,5 +1,5 @@
 use anchor_lang::prelude::*;
-use kamino_lend::Reserve;
+use kamino_lend::state::Reserve;
 use crate::state::SwapMarket;
 use crate::helpers::read_kamino_rate_index;
 use crate::errors::AnemoneError;
