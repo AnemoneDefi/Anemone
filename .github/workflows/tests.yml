@@ -58,6 +58,9 @@ jobs:
       - name: Install SBF platform-tools ${{ env.SBF_TOOLS_VERSION }}
         run: cargo-build-sbf --tools-version ${{ env.SBF_TOOLS_VERSION }} --install-only
 
+      - name: Install system dependencies
+        run: sudo apt-get install -y libudev-dev
+
       - name: Cache Anchor CLI ${{ env.ANCHOR_VERSION }}
         id: cache-anchor
         uses: actions/cache@v4
