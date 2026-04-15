@@ -68,4 +68,13 @@ pub mod anemone {
     pub fn withdraw_from_kamino(ctx: Context<WithdrawFromKamino>, collateral_amount: u64) -> Result<()> {
         instructions::keeper::withdraw_from_kamino::handle_withdraw_from_kamino(ctx, collateral_amount)
     }
+
+    pub fn open_swap(
+        ctx: Context<OpenSwap>,
+        direction: state::SwapDirection,
+        notional: u64,
+        nonce: u8,
+    ) -> Result<()> {
+        instructions::trader::open_swap::handle_open_swap(ctx, direction, notional, nonce)
+    }
 }

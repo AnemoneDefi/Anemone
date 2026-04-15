@@ -44,6 +44,12 @@ pub fn handle_update_rate_index(ctx: Context<UpdateRateIndex>) -> Result<()> {
 
     require!(rate_index > 0, AnemoneError::InvalidRateIndex);
 
+    // Rotate: current → previous (keeps two snapshots for APY calculation)
+    if market.current_rate_index > 0 {
+        market.previous_rate_index = market.current_rate_index;
+        market.previous_rate_update_ts = market.last_rate_update_ts;
+    }
+
     market.current_rate_index = rate_index;
     market.last_rate_update_ts = Clock::get()?.unix_timestamp;
 

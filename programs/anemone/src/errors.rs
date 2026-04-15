@@ -24,4 +24,10 @@ pub enum AnemoneError {
     PoolUndercollateralized,
     #[msg("Reserve data is stale — refresh before updating rate")]
     StaleOracle,
+    #[msg("Pool utilization would exceed maximum allowed")]
+    UtilizationExceeded,
+    #[msg("Insufficient collateral for required initial margin")]
+    InsufficientCollateral,
+    #[msg("Rate index not initialized — keeper must update rate first")]
+    RateIndexNotInitialized,
 }

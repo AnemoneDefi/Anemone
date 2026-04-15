@@ -1,0 +1,255 @@
+use anchor_lang::prelude::*;
+use anchor_spl::token_interface::{
+    Mint, TokenAccount, TokenInterface,
+    transfer_checked, TransferChecked,
+};
+use crate::state::{SwapMarket, SwapPosition, SwapDirection, PositionStatus, ProtocolState};
+use crate::helpers::{calculate_spread_bps, calculate_initial_margin, calculate_current_apy_from_index};
+use crate::errors::AnemoneError;
+
+#[derive(Accounts)]
+#[instruction(direction: SwapDirection, notional: u64, nonce: u8)]
+pub struct OpenSwap<'info> {
+    #[account(
+        seeds = [b"protocol"],
+        bump = protocol_state.bump,
+        has_one = treasury @ AnemoneError::InvalidVault,
+    )]
+    pub protocol_state: Account<'info, ProtocolState>,
+
+    #[account(
+        mut,
+        seeds = [b"market", market.underlying_reserve.as_ref(), &market.tenor_seconds.to_le_bytes()],
+        bump = market.bump,
+        constraint = market.status == 0 @ AnemoneError::MarketPaused,
+    )]
+    pub market: Account<'info, SwapMarket>,
+
+    #[account(
+        init,
+        payer = trader,
+        space = SwapPosition::SIZE,
+        seeds = [b"swap", trader.key().as_ref(), market.key().as_ref(), &[nonce]],
+        bump,
+    )]
+    pub swap_position: Account<'info, SwapPosition>,
+
+    /// Collateral vault — holds trader margin deposits
+    #[account(
+        mut,
+        address = market.collateral_vault @ AnemoneError::InvalidVault,
+    )]
+    pub collateral_vault: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    /// Treasury — receives opening fee
+    #[account(
+        mut,
+        token::mint = underlying_mint,
+        address = protocol_state.treasury @ AnemoneError::InvalidVault,
+    )]
+    pub treasury: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    /// The underlying token mint (e.g. USDC)
+    #[account(
+        address = market.underlying_mint @ AnemoneError::InvalidMint,
+    )]
+    pub underlying_mint: Box<InterfaceAccount<'info, Mint>>,
+
+    /// Trader's token account (source of collateral + fee)
+    #[account(
+        mut,
+        token::mint = underlying_mint,
+        token::authority = trader,
+    )]
+    pub trader_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    #[account(mut)]
+    pub trader: Signer<'info>,
+
+    pub token_program: Interface<'info, TokenInterface>,
+    pub system_program: Program<'info, System>,
+}
+
+pub fn handle_open_swap(
+    ctx: Context<OpenSwap>,
+    direction: SwapDirection,
+    notional: u64,
+    nonce: u8,
+) -> Result<()> {
+    require!(notional > 0, AnemoneError::InvalidAmount);
+
+    let market = &ctx.accounts.market;
+    let protocol_state = &ctx.accounts.protocol_state;
+
+    // 1. Validate rate index has been initialized by keeper
+    require!(
+        market.current_rate_index > 0 && market.previous_rate_index > 0,
+        AnemoneError::RateIndexNotInitialized
+    );
+
+    // 2. Calculate current APY from the two rate index snapshots
+    let elapsed = market.last_rate_update_ts
+        .checked_sub(market.previous_rate_update_ts)
+        .ok_or(AnemoneError::MathOverflow)?;
+
+    // If elapsed is 0 (two updates in same second) or indices are equal,
+    // APY cannot be computed — default to 0
+    let current_apy_bps = if elapsed <= 0
+        || market.current_rate_index == market.previous_rate_index
+    {
+        0u64
+    } else {
+        calculate_current_apy_from_index(
+            market.previous_rate_index,
+            market.current_rate_index,
+            elapsed,
+        )?
+    };
+
+    // 3. Calculate spread (including the new swap's impact on utilization/imbalance)
+    let (fixed_with_new, variable_with_new) = match direction {
+        SwapDirection::PayFixed => (
+            market.total_fixed_notional.checked_add(notional).ok_or(AnemoneError::MathOverflow)?,
+            market.total_variable_notional,
+        ),
+        SwapDirection::ReceiveFixed => (
+            market.total_fixed_notional,
+            market.total_variable_notional.checked_add(notional).ok_or(AnemoneError::MathOverflow)?,
+        ),
+    };
+
+    let spread_bps = calculate_spread_bps(
+        market.base_spread_bps,
+        market.max_utilization_bps,
+        market.total_lp_deposits,
+        fixed_with_new,
+        variable_with_new,
+        market.pending_withdrawals,
+    )?;
+
+    // 4. Calculate offered fixed rate
+    let fixed_rate_bps = match direction {
+        SwapDirection::PayFixed => {
+            current_apy_bps.checked_add(spread_bps)
+                .ok_or(AnemoneError::MathOverflow)?
+        }
+        SwapDirection::ReceiveFixed => {
+            require!(current_apy_bps > spread_bps, AnemoneError::InvalidAmount);
+            current_apy_bps.checked_sub(spread_bps)
+                .ok_or(AnemoneError::MathOverflow)?
+        }
+    };
+
+    // 5. Calculate initial margin
+    let margin = calculate_initial_margin(notional, market.tenor_seconds)?;
+
+    // 6. Calculate opening fee (0.05% of notional)
+    let fee = (notional as u128)
+        .checked_mul(protocol_state.opening_fee_bps as u128)
+        .and_then(|v| v.checked_div(10_000))
+        .ok_or(AnemoneError::MathOverflow)? as u64;
+
+    // 7. Validate utilization after this new position
+    let new_total_notional = (market.total_fixed_notional as u128)
+        .checked_add(market.total_variable_notional as u128)
+        .and_then(|v| v.checked_add(notional as u128))
+        .and_then(|v| v.checked_add(market.pending_withdrawals as u128))
+        .ok_or(AnemoneError::MathOverflow)?;
+
+    let utilization_bps = new_total_notional
+        .checked_mul(10_000)
+        .and_then(|v| v.checked_div(market.total_lp_deposits as u128))
+        .ok_or(AnemoneError::MathOverflow)?;
+
+    require!(
+        utilization_bps <= market.max_utilization_bps as u128,
+        AnemoneError::UtilizationExceeded
+    );
+
+    // 8. Validate trader has enough funds
+    let total_required = margin.checked_add(fee).ok_or(AnemoneError::MathOverflow)?;
+    require!(
+        ctx.accounts.trader_token_account.amount >= total_required,
+        AnemoneError::InsufficientCollateral
+    );
+
+    // 9. Transfer opening fee: trader → treasury
+    if fee > 0 {
+        transfer_checked(
+            CpiContext::new(
+                ctx.accounts.token_program.to_account_info(),
+                TransferChecked {
+                    from: ctx.accounts.trader_token_account.to_account_info(),
+                    to: ctx.accounts.treasury.to_account_info(),
+                    authority: ctx.accounts.trader.to_account_info(),
+                    mint: ctx.accounts.underlying_mint.to_account_info(),
+                },
+            ),
+            fee,
+            ctx.accounts.underlying_mint.decimals,
+        )?;
+    }
+
+    // 10. Transfer margin: trader → collateral_vault
+    transfer_checked(
+        CpiContext::new(
+            ctx.accounts.token_program.to_account_info(),
+            TransferChecked {
+                from: ctx.accounts.trader_token_account.to_account_info(),
+                to: ctx.accounts.collateral_vault.to_account_info(),
+                authority: ctx.accounts.trader.to_account_info(),
+                mint: ctx.accounts.underlying_mint.to_account_info(),
+            },
+        ),
+        margin,
+        ctx.accounts.underlying_mint.decimals,
+    )?;
+
+    // 11. Initialize SwapPosition
+    let now = Clock::get()?.unix_timestamp;
+    let position = &mut ctx.accounts.swap_position;
+    position.owner = ctx.accounts.trader.key();
+    position.market = ctx.accounts.market.key();
+    position.direction = direction;
+    position.notional = notional;
+    position.fixed_rate_bps = fixed_rate_bps;
+    position.leverage = 1;
+    position.collateral_deposited = margin;
+    position.collateral_remaining = margin;
+    position.entry_rate_index = market.current_rate_index;
+    position.last_settled_rate_index = market.current_rate_index;
+    position.realized_pnl = 0;
+    position.num_settlements = 0;
+    position.open_timestamp = now;
+    position.maturity_timestamp = now + market.tenor_seconds;
+    position.next_settlement_ts = now + market.settlement_period_seconds;
+    position.last_settlement_ts = now;
+    position.status = PositionStatus::Open;
+    position.nonce = nonce;
+    position.bump = ctx.bumps.swap_position;
+
+    // 12. Update market totals
+    let market = &mut ctx.accounts.market;
+    match direction {
+        SwapDirection::PayFixed => {
+            market.total_fixed_notional = market.total_fixed_notional
+                .checked_add(notional)
+                .ok_or(AnemoneError::MathOverflow)?;
+        }
+        SwapDirection::ReceiveFixed => {
+            market.total_variable_notional = market.total_variable_notional
+                .checked_add(notional)
+                .ok_or(AnemoneError::MathOverflow)?;
+        }
+    }
+    market.total_open_positions = market.total_open_positions
+        .checked_add(1)
+        .ok_or(AnemoneError::MathOverflow)?;
+
+    msg!(
+        "Swap opened: {:?} notional={} fixed_rate={}bps margin={} fee={}",
+        direction, notional, fixed_rate_bps, margin, fee
+    );
+
+    Ok(())
+}
