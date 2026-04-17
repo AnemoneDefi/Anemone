@@ -30,4 +30,10 @@ pub enum AnemoneError {
     InsufficientCollateral,
     #[msg("Rate index not initialized — keeper must update rate first")]
     RateIndexNotInitialized,
+    #[msg("Settlement period has not elapsed yet")]
+    SettlementNotDue,
+    #[msg("Position is not open")]
+    PositionNotOpen,
+    #[msg("Offered rate exceeds trader's slippage tolerance")]
+    SlippageExceeded,
 }

@@ -69,12 +69,20 @@ pub mod anemone {
         instructions::keeper::withdraw_from_kamino::handle_withdraw_from_kamino(ctx, collateral_amount)
     }
 
+    pub fn settle_period(ctx: Context<SettlePeriod>) -> Result<()> {
+        instructions::trader::settle_period::handle_settle_period(ctx)
+    }
+
     pub fn open_swap(
         ctx: Context<OpenSwap>,
         direction: state::SwapDirection,
         notional: u64,
         nonce: u8,
+        max_rate_bps: u64,
+        min_rate_bps: u64,
     ) -> Result<()> {
-        instructions::trader::open_swap::handle_open_swap(ctx, direction, notional, nonce)
+        instructions::trader::open_swap::handle_open_swap(
+            ctx, direction, notional, nonce, max_rate_bps, min_rate_bps,
+        )
     }
 }
