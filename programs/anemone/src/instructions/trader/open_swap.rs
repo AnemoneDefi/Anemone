@@ -8,7 +8,7 @@ use crate::helpers::{calculate_spread_bps, calculate_initial_margin, calculate_c
 use crate::errors::AnemoneError;
 
 #[derive(Accounts)]
-#[instruction(direction: SwapDirection, notional: u64, nonce: u8)]
+#[instruction(direction: SwapDirection, notional: u64, nonce: u8, max_rate_bps: u64, min_rate_bps: u64)]
 pub struct OpenSwap<'info> {
     #[account(
         seeds = [b"protocol"],
@@ -75,6 +75,8 @@ pub fn handle_open_swap(
     direction: SwapDirection,
     notional: u64,
     nonce: u8,
+    max_rate_bps: u64,
+    min_rate_bps: u64,
 ) -> Result<()> {
     require!(notional > 0, AnemoneError::InvalidAmount);
 
@@ -139,6 +141,18 @@ pub fn handle_open_swap(
                 .ok_or(AnemoneError::MathOverflow)?
         }
     };
+
+    // 4b. Slippage protection (MEV defense)
+    // PayFixed: trader pays the fixed rate → wants it capped from above (max_rate_bps)
+    // ReceiveFixed: trader receives the fixed rate → wants it floored (min_rate_bps)
+    match direction {
+        SwapDirection::PayFixed => {
+            require!(fixed_rate_bps <= max_rate_bps, AnemoneError::SlippageExceeded);
+        }
+        SwapDirection::ReceiveFixed => {
+            require!(fixed_rate_bps >= min_rate_bps, AnemoneError::SlippageExceeded);
+        }
+    }
 
     // 5. Calculate initial margin
     let margin = calculate_initial_margin(notional, market.tenor_seconds)?;
