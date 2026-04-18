@@ -85,4 +85,12 @@ pub mod anemone {
             ctx, direction, notional, nonce, max_rate_bps, min_rate_bps,
         )
     }
+
+    pub fn claim_matured(ctx: Context<ClaimMatured>) -> Result<()> {
+        instructions::trader::claim_matured::handle_claim_matured(ctx)
+    }
+
+    pub fn liquidate_position(ctx: Context<LiquidatePosition>) -> Result<()> {
+        instructions::trader::liquidate_position::handle_liquidate_position(ctx)
+    }
 }
