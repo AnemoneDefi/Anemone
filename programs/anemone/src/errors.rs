@@ -36,4 +36,8 @@ pub enum AnemoneError {
     PositionNotOpen,
     #[msg("Offered rate exceeds trader's slippage tolerance")]
     SlippageExceeded,
+    #[msg("Position is not matured — cannot claim yet")]
+    PositionNotMatured,
+    #[msg("Position is above maintenance margin — cannot liquidate")]
+    AboveMaintenanceMargin,
 }

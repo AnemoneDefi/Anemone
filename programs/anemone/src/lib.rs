@@ -85,4 +85,20 @@ pub mod anemone {
             ctx, direction, notional, nonce, max_rate_bps, min_rate_bps,
         )
     }
+
+    pub fn claim_matured(ctx: Context<ClaimMatured>) -> Result<()> {
+        instructions::trader::claim_matured::handle_claim_matured(ctx)
+    }
+
+    pub fn liquidate_position(ctx: Context<LiquidatePosition>) -> Result<()> {
+        instructions::trader::liquidate_position::handle_liquidate_position(ctx)
+    }
+
+    pub fn close_position_early(ctx: Context<ClosePositionEarly>) -> Result<()> {
+        instructions::trader::close_position_early::handle_close_position_early(ctx)
+    }
+
+    pub fn add_collateral(ctx: Context<AddCollateral>, amount: u64) -> Result<()> {
+        instructions::trader::add_collateral::handle_add_collateral(ctx, amount)
+    }
 }
