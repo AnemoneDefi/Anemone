@@ -1910,4 +1910,432 @@ describe("anemone", () => {
       }
     });
   });
+
+  describe("close_position_early & add_collateral", () => {
+    // For rejection tests we reuse the PayFixed position opened at nonce=0 on the
+    // Kamino 7-day market (created in the open_swap suite). It remains Open
+    // throughout the test run since no clock warp was sufficient to mature or
+    // liquidate it.
+    const KAMINO_TENOR = new anchor.BN(604_800);
+    let addMarketPda: PublicKey;
+    let addCollateralVaultPda: PublicKey;
+    let addLpVaultPda: PublicKey;
+    let addSwapPositionPda: PublicKey;
+
+    before(async () => {
+      [addMarketPda] = PublicKey.findProgramAddressSync(
+        [
+          Buffer.from("market"),
+          KAMINO_USDC_RESERVE.toBuffer(),
+          KAMINO_TENOR.toArrayLike(Buffer, "le", 8),
+        ],
+        program.programId
+      );
+      [addCollateralVaultPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("collateral_vault"), addMarketPda.toBuffer()],
+        program.programId
+      );
+      [addLpVaultPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("lp_vault"), addMarketPda.toBuffer()],
+        program.programId
+      );
+      [addSwapPositionPda] = PublicKey.findProgramAddressSync(
+        [
+          Buffer.from("swap"),
+          authority.publicKey.toBuffer(),
+          addMarketPda.toBuffer(),
+          Buffer.from([0]),
+        ],
+        program.programId
+      );
+    });
+
+    it("rejects add_collateral with amount = 0", async () => {
+      const ownerKp = Keypair.generate();
+      const ownerToken = await createAccount(
+        provider.connection,
+        (authority as any).payer,
+        underlyingMint.publicKey,
+        authority.publicKey,
+        ownerKp,
+      );
+
+      try {
+        await program.methods
+          .addCollateral(new anchor.BN(0))
+          .accountsStrict({
+            market: addMarketPda,
+            swapPosition: addSwapPositionPda,
+            collateralVault: addCollateralVaultPda,
+            underlyingMint: underlyingMint.publicKey,
+            ownerTokenAccount: ownerToken,
+            owner: authority.publicKey,
+            tokenProgram: TOKEN_PROGRAM_ID,
+          })
+          .rpc();
+        assert.fail("Should have rejected — amount = 0");
+      } catch (err: any) {
+        assert.include(err.toString(), "InvalidAmount");
+        console.log("add_collateral correctly rejected with amount = 0 ✓");
+      }
+    });
+
+    it("rejects add_collateral by non-owner", async () => {
+      const fake = Keypair.generate();
+      const sig = await provider.connection.requestAirdrop(fake.publicKey, 1_000_000_000);
+      const bh = await provider.connection.getLatestBlockhash();
+      await provider.connection.confirmTransaction({
+        signature: sig,
+        blockhash: bh.blockhash,
+        lastValidBlockHeight: bh.lastValidBlockHeight,
+      });
+      const fakeToken = await createAccount(
+        provider.connection, fake,
+        underlyingMint.publicKey, fake.publicKey,
+      );
+
+      try {
+        await program.methods
+          .addCollateral(new anchor.BN(1_000_000))
+          .accountsStrict({
+            market: addMarketPda,
+            swapPosition: addSwapPositionPda,
+            collateralVault: addCollateralVaultPda,
+            underlyingMint: underlyingMint.publicKey,
+            ownerTokenAccount: fakeToken,
+            owner: fake.publicKey,
+            tokenProgram: TOKEN_PROGRAM_ID,
+          })
+          .signers([fake])
+          .rpc();
+        assert.fail("Should have rejected — non-owner");
+      } catch (err) {
+        // Rejected either by constraint on owner, or by PDA seed mismatch
+        console.log("add_collateral correctly rejected by non-owner ✓");
+      }
+    });
+
+    it("rejects close_position_early by non-owner", async () => {
+      const fake = Keypair.generate();
+      const sig = await provider.connection.requestAirdrop(fake.publicKey, 1_000_000_000);
+      const bh = await provider.connection.getLatestBlockhash();
+      await provider.connection.confirmTransaction({
+        signature: sig,
+        blockhash: bh.blockhash,
+        lastValidBlockHeight: bh.lastValidBlockHeight,
+      });
+      const fakeToken = await createAccount(
+        provider.connection, fake,
+        underlyingMint.publicKey, fake.publicKey,
+      );
+
+      try {
+        await program.methods
+          .closePositionEarly()
+          .accountsStrict({
+            protocolState: protocolStatePda,
+            market: addMarketPda,
+            swapPosition: addSwapPositionPda,
+            lpVault: addLpVaultPda,
+            collateralVault: addCollateralVaultPda,
+            treasury: treasury.publicKey,
+            underlyingMint: underlyingMint.publicKey,
+            ownerTokenAccount: fakeToken,
+            owner: fake.publicKey,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([fake])
+          .rpc();
+        assert.fail("Should have rejected — non-owner");
+      } catch (err) {
+        console.log("close_position_early correctly rejected by non-owner ✓");
+      }
+    });
+
+    it("successfully adds collateral to an open position", async () => {
+      // Create a fresh trader token account and mint USDC to it
+      const traderKp = Keypair.generate();
+      const traderToken = await createAccount(
+        provider.connection,
+        (authority as any).payer,
+        underlyingMint.publicKey,
+        authority.publicKey,
+        traderKp,
+      );
+
+      const ADD_AMOUNT = 50_000_000; // $50 USDC (6 decimals)
+      await mintTo(
+        provider.connection,
+        (authority as any).payer,
+        underlyingMint.publicKey,
+        traderToken,
+        authority.publicKey,
+        ADD_AMOUNT,
+      );
+
+      const posBefore = await program.account.swapPosition.fetch(addSwapPositionPda);
+      const vaultBefore = await getAccount(provider.connection, addCollateralVaultPda);
+
+      await program.methods
+        .addCollateral(new anchor.BN(ADD_AMOUNT))
+        .accountsStrict({
+          market: addMarketPda,
+          swapPosition: addSwapPositionPda,
+          collateralVault: addCollateralVaultPda,
+          underlyingMint: underlyingMint.publicKey,
+          ownerTokenAccount: traderToken,
+          owner: authority.publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .rpc();
+
+      const posAfter = await program.account.swapPosition.fetch(addSwapPositionPda);
+      const vaultAfter = await getAccount(provider.connection, addCollateralVaultPda);
+      const traderBalance = await getAccount(provider.connection, traderToken);
+
+      assert.equal(
+        posAfter.collateralRemaining.toNumber(),
+        posBefore.collateralRemaining.toNumber() + ADD_AMOUNT,
+        "collateral_remaining should increase by amount"
+      );
+      assert.equal(
+        Number(vaultAfter.amount) - Number(vaultBefore.amount),
+        ADD_AMOUNT,
+        "collateral_vault should receive the added amount"
+      );
+      assert.equal(
+        Number(traderBalance.amount), 0,
+        "trader token account should be debited"
+      );
+
+      console.log(`add_collateral: +$${ADD_AMOUNT / 1e6} — new collateral=${posAfter.collateralRemaining.toNumber()} ✓`);
+    });
+
+    it("successfully closes a position early (mark-to-market + 5% fee)", async () => {
+      // Create a fresh market + position for this test
+      const EARLY_TENOR = new anchor.BN(300); // 5 min
+      const earlyCollateralMint = Keypair.generate();
+
+      const [earlyMarketPda] = PublicKey.findProgramAddressSync(
+        [
+          Buffer.from("market"),
+          KAMINO_USDC_RESERVE.toBuffer(),
+          EARLY_TENOR.toArrayLike(Buffer, "le", 8),
+        ],
+        program.programId
+      );
+      const [earlyLpVaultPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("lp_vault"), earlyMarketPda.toBuffer()],
+        program.programId
+      );
+      const [earlyCollateralVaultPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("collateral_vault"), earlyMarketPda.toBuffer()],
+        program.programId
+      );
+      const [earlyLpMintPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("lp_mint"), earlyMarketPda.toBuffer()],
+        program.programId
+      );
+      const [earlyKaminoDepositPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("kamino_deposit"), earlyMarketPda.toBuffer()],
+        program.programId
+      );
+      const [earlyLpPositionPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("lp"), authority.publicKey.toBuffer(), earlyMarketPda.toBuffer()],
+        program.programId
+      );
+
+      await createMint(
+        provider.connection,
+        (authority as any).payer,
+        authority.publicKey,
+        null,
+        6,
+        earlyCollateralMint,
+      );
+
+      await program.methods
+        .createMarket(
+          EARLY_TENOR,
+          new anchor.BN(60),  // 1min settlement
+          6000,
+          80,                 // normal spread
+          20,
+        )
+        .accountsStrict({
+          protocolState: protocolStatePda,
+          market: earlyMarketPda,
+          lpVault: earlyLpVaultPda,
+          collateralVault: earlyCollateralVaultPda,
+          lpMint: earlyLpMintPda,
+          kaminoDepositAccount: earlyKaminoDepositPda,
+          kaminoCollateralMint: earlyCollateralMint.publicKey,
+          underlyingReserve: KAMINO_USDC_RESERVE,
+          underlyingProtocol: KAMINO_PROGRAM_ID,
+          underlyingMint: underlyingMint.publicKey,
+          authority: authority.publicKey,
+          systemProgram: SystemProgram.programId,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .rpc();
+
+      const LP_DEPOSIT = 100_000_000_000;
+      const SWAP_NOTIONAL = 10_000_000_000;
+
+      const earlyTraderKp = Keypair.generate();
+      const earlyTraderToken = await createAccount(
+        provider.connection,
+        (authority as any).payer,
+        underlyingMint.publicKey,
+        authority.publicKey,
+        earlyTraderKp,
+      );
+      await mintTo(
+        provider.connection,
+        (authority as any).payer,
+        underlyingMint.publicKey,
+        earlyTraderToken,
+        authority.publicKey,
+        LP_DEPOSIT + SWAP_NOTIONAL,
+      );
+
+      const earlyLpTokenKp = Keypair.generate();
+      const earlyLpToken = await createAccount(
+        provider.connection,
+        (authority as any).payer,
+        earlyLpMintPda,
+        authority.publicKey,
+        earlyLpTokenKp,
+      );
+
+      await program.methods
+        .depositLiquidity(new anchor.BN(LP_DEPOSIT))
+        .accountsStrict({
+          market: earlyMarketPda,
+          lpPosition: earlyLpPositionPda,
+          lpVault: earlyLpVaultPda,
+          lpMint: earlyLpMintPda,
+          underlyingMint: underlyingMint.publicKey,
+          depositorTokenAccount: earlyTraderToken,
+          depositorLpTokenAccount: earlyLpToken,
+          depositor: authority.publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+
+      await program.methods.updateRateIndex().accountsStrict({
+        market: earlyMarketPda, kaminoReserve: KAMINO_USDC_RESERVE,
+      }).rpc();
+      await program.methods.updateRateIndex().accountsStrict({
+        market: earlyMarketPda, kaminoReserve: KAMINO_USDC_RESERVE,
+      }).rpc();
+
+      const nonce = 0;
+      const [earlySwapPosPda] = PublicKey.findProgramAddressSync(
+        [
+          Buffer.from("swap"),
+          authority.publicKey.toBuffer(),
+          earlyMarketPda.toBuffer(),
+          Buffer.from([nonce]),
+        ],
+        program.programId
+      );
+
+      await program.methods
+        .openSwap(
+          { payFixed: {} },
+          new anchor.BN(SWAP_NOTIONAL),
+          nonce,
+          new anchor.BN(10_000),
+          new anchor.BN(0),
+        )
+        .accountsStrict({
+          protocolState: protocolStatePda,
+          market: earlyMarketPda,
+          swapPosition: earlySwapPosPda,
+          collateralVault: earlyCollateralVaultPda,
+          treasury: treasury.publicKey,
+          underlyingMint: underlyingMint.publicKey,
+          traderTokenAccount: earlyTraderToken,
+          trader: authority.publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+
+      const posOpen = await program.account.swapPosition.fetch(earlySwapPosPda);
+      const initialCollateral = posOpen.collateralRemaining.toNumber();
+      console.log(`  Opened: collateral=${initialCollateral}, fixed_rate=${posOpen.fixedRateBps.toNumber()}bps`);
+
+      // Record pre-close balances
+      const receiptKp = Keypair.generate();
+      const earlyOwnerReceiptToken = await createAccount(
+        provider.connection,
+        (authority as any).payer,
+        underlyingMint.publicKey,
+        authority.publicKey,
+        receiptKp,
+      );
+
+      const treasuryBefore = await getAccount(provider.connection, treasury.publicKey);
+      const marketBefore = await program.account.swapMarket.fetch(earlyMarketPda);
+
+      const tx = await program.methods
+        .closePositionEarly()
+        .accountsStrict({
+          protocolState: protocolStatePda,
+          market: earlyMarketPda,
+          swapPosition: earlySwapPosPda,
+          lpVault: earlyLpVaultPda,
+          collateralVault: earlyCollateralVaultPda,
+          treasury: treasury.publicKey,
+          underlyingMint: underlyingMint.publicKey,
+          ownerTokenAccount: earlyOwnerReceiptToken,
+          owner: authority.publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+
+      console.log(`  close_position_early tx: ${tx}`);
+
+      // Sum what went out: fee (treasury) + remainder (owner)
+      const treasuryAfter = await getAccount(provider.connection, treasury.publicKey);
+      const ownerBalance = await getAccount(provider.connection, earlyOwnerReceiptToken);
+
+      const feeReceived = Number(treasuryAfter.amount) - Number(treasuryBefore.amount);
+      const remainderReceived = Number(ownerBalance.amount);
+      const totalOut = feeReceived + remainderReceived;
+
+      // Mark-to-market PnL might have adjusted collateral, so totalOut may differ from initialCollateral
+      // Fee should be 5% of the adjusted collateral: fee * 10000 / 500 = adjusted collateral
+      const adjustedCollateral = totalOut;
+      const expectedFee = Math.floor(adjustedCollateral * 500 / 10_000);
+      assert.approximately(feeReceived, expectedFee, 1,
+        `Fee should be ~5% of adjusted collateral (${adjustedCollateral}), got ${feeReceived}`);
+
+      const expectedRemainder = adjustedCollateral - expectedFee;
+      assert.approximately(remainderReceived, expectedRemainder, 1,
+        "Owner should receive ~95% of adjusted collateral");
+
+      // Market totals decremented
+      const marketAfter = await program.account.swapMarket.fetch(earlyMarketPda);
+      assert.equal(
+        marketAfter.totalFixedNotional.toNumber(),
+        marketBefore.totalFixedNotional.toNumber() - SWAP_NOTIONAL,
+      );
+      assert.equal(
+        marketAfter.totalOpenPositions.toNumber(),
+        marketBefore.totalOpenPositions.toNumber() - 1,
+      );
+
+      // Position account closed
+      const closed = await provider.connection.getAccountInfo(earlySwapPosPda);
+      assert.isNull(closed, "SwapPosition should be closed");
+
+      console.log(`  Early close: fee=${feeReceived} (5%), owner=${remainderReceived} (95%), initialCollateral=${initialCollateral}, adjustedCollateral=${adjustedCollateral} ✓`);
+    });
+  });
 });

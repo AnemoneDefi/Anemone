@@ -93,4 +93,12 @@ pub mod anemone {
     pub fn liquidate_position(ctx: Context<LiquidatePosition>) -> Result<()> {
         instructions::trader::liquidate_position::handle_liquidate_position(ctx)
     }
+
+    pub fn close_position_early(ctx: Context<ClosePositionEarly>) -> Result<()> {
+        instructions::trader::close_position_early::handle_close_position_early(ctx)
+    }
+
+    pub fn add_collateral(ctx: Context<AddCollateral>, amount: u64) -> Result<()> {
+        instructions::trader::add_collateral::handle_add_collateral(ctx, amount)
+    }
 }
