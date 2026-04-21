@@ -32,6 +32,8 @@ pub fn handle_initialize_protocol(
     let protocol_state = &mut ctx.accounts.protocol_state;
 
     protocol_state.authority = ctx.accounts.authority.key();
+    // Default keeper = authority. Admin can rotate later via `set_keeper`.
+    protocol_state.keeper_authority = ctx.accounts.authority.key();
     protocol_state.treasury = ctx.accounts.treasury.key();
     protocol_state.total_markets = 0;
     protocol_state.protocol_fee_bps = protocol_fee_bps;

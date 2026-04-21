@@ -49,6 +49,17 @@ pub mod anemone {
         )
     }
 
+    pub fn set_keeper(ctx: Context<SetKeeper>, new_keeper: Pubkey) -> Result<()> {
+        instructions::admin::set_keeper::handle_set_keeper(ctx, new_keeper)
+    }
+
+    pub fn set_rate_index_oracle(
+        ctx: Context<SetRateIndexOracle>,
+        rate_index: u128,
+    ) -> Result<()> {
+        instructions::admin::set_rate_index_oracle::handle_set_rate_index_oracle(ctx, rate_index)
+    }
+
     pub fn update_rate_index(ctx: Context<UpdateRateIndex>) -> Result<()> {
         instructions::keeper::update_rate_index::handle_update_rate_index(ctx)
     }
