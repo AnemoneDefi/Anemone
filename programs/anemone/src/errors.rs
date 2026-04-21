@@ -42,4 +42,8 @@ pub enum AnemoneError {
     AboveMaintenanceMargin,
     #[msg("Invalid authority — caller is not the protocol keeper")]
     InvalidAuthority,
+    #[msg("LP position has no pending withdrawal to claim")]
+    NoPendingWithdrawal,
+    #[msg("LP vault liquidity is insufficient for this claim — keeper must rebalance")]
+    InsufficientVaultLiquidity,
 }

@@ -26,6 +26,7 @@ pub struct RequestWithdrawal<'info> {
         seeds = [b"lp", withdrawer.key().as_ref(), market.key().as_ref()],
         bump = lp_position.bump,
         constraint = lp_position.owner == withdrawer.key() @ AnemoneError::InsufficientShares,
+        constraint = lp_position.status == LpStatus::Active @ AnemoneError::NoPendingWithdrawal,
     )]
     pub lp_position: Account<'info, LpPosition>,
 
@@ -57,7 +58,7 @@ pub struct RequestWithdrawal<'info> {
     )]
     pub withdrawer_lp_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
 
-    /// Withdrawer's USDC token account (destination)
+    /// Withdrawer's USDC token account (destination — only used on fast path)
     #[account(
         mut,
         token::mint = underlying_mint,
@@ -89,19 +90,25 @@ pub fn handle_request_withdrawal(
     let lp_position = &ctx.accounts.lp_position;
     let protocol_state = &ctx.accounts.protocol_state;
 
-    // Step 1: Validate LP has enough shares
     require!(lp_position.shares >= shares_to_burn, AnemoneError::InsufficientShares);
 
-    // Step 2: Calculate withdrawal amount
+    // Share-price uses effective deposits (total - already pending) so that
+    // consecutive queue-path requests stay consistent with the USDC actually
+    // available to be paid out.
+    let effective_deposits = market.total_lp_deposits
+        .checked_sub(market.pending_withdrawals)
+        .ok_or(AnemoneError::MathOverflow)?;
     let gross_amount = (shares_to_burn as u128)
-        .checked_mul(market.total_lp_deposits as u128)
+        .checked_mul(effective_deposits as u128)
         .and_then(|v| v.checked_div(market.total_lp_shares as u128))
         .ok_or(AnemoneError::MathOverflow)? as u64;
 
-    // Step 3: Verify pool remains collateralized after withdrawal
+    // Collateralization check — must hold even if withdrawal is queued,
+    // because once the USDC leaves the pool (eventually) it can no longer
+    // back open positions.
     let total_notional = market.total_fixed_notional
         .max(market.total_variable_notional);
-    let remaining_deposits = market.total_lp_deposits
+    let remaining_deposits = effective_deposits
         .checked_sub(gross_amount)
         .ok_or(AnemoneError::MathOverflow)?;
     let max_notional_after = (remaining_deposits as u128)
@@ -110,14 +117,8 @@ pub fn handle_request_withdrawal(
         .ok_or(AnemoneError::MathOverflow)? as u64;
     require!(total_notional <= max_notional_after, AnemoneError::PoolUndercollateralized);
 
-    // Step 4: Calculate withdrawal fee (0.05%)
-    let fee = (gross_amount as u128)
-        .checked_mul(protocol_state.withdrawal_fee_bps as u128)
-        .and_then(|v| v.checked_div(10_000))
-        .ok_or(AnemoneError::MathOverflow)? as u64;
-    let net_amount = gross_amount.checked_sub(fee).ok_or(AnemoneError::MathOverflow)?;
-
-    // Step 5: Burn LP tokens from withdrawer
+    // Burn shares immediately in both paths — prevents the LP from transferring
+    // the LP tokens elsewhere and double-spending the withdrawal claim.
     burn(
         CpiContext::new(
             ctx.accounts.token_program.to_account_info(),
@@ -130,71 +131,104 @@ pub fn handle_request_withdrawal(
         shares_to_burn,
     )?;
 
-    // PDA signer seeds for vault transfers
-    let reserve_key = market.underlying_reserve;
-    let tenor_bytes = market.tenor_seconds.to_le_bytes();
-    let bump = market.bump;
-    let signer_seeds: &[&[&[u8]]] = &[&[
-        b"market",
-        reserve_key.as_ref(),
-        &tenor_bytes,
-        &[bump],
-    ]];
+    let vault_balance = ctx.accounts.lp_vault.amount;
+    let can_pay_now = vault_balance >= gross_amount;
 
-    // Step 6: Transfer net amount from lp_vault to withdrawer
-    transfer_checked(
-        CpiContext::new_with_signer(
-            ctx.accounts.token_program.to_account_info(),
-            TransferChecked {
-                from: ctx.accounts.lp_vault.to_account_info(),
-                to: ctx.accounts.withdrawer_token_account.to_account_info(),
-                authority: ctx.accounts.market.to_account_info(),
-                mint: ctx.accounts.underlying_mint.to_account_info(),
-            },
-            signer_seeds,
-        ),
-        net_amount,
-        ctx.accounts.underlying_mint.decimals,
-    )?;
+    if can_pay_now {
+        // Fast path — vault has the USDC on hand, deliver immediately.
+        let fee = (gross_amount as u128)
+            .checked_mul(protocol_state.withdrawal_fee_bps as u128)
+            .and_then(|v| v.checked_div(10_000))
+            .ok_or(AnemoneError::MathOverflow)? as u64;
+        let net_amount = gross_amount.checked_sub(fee).ok_or(AnemoneError::MathOverflow)?;
 
-    // Transfer fee to treasury
-    if fee > 0 {
+        let reserve_key = market.underlying_reserve;
+        let tenor_bytes = market.tenor_seconds.to_le_bytes();
+        let bump = market.bump;
+        let signer_seeds: &[&[&[u8]]] = &[&[
+            b"market",
+            reserve_key.as_ref(),
+            &tenor_bytes,
+            &[bump],
+        ]];
+
         transfer_checked(
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
                 TransferChecked {
                     from: ctx.accounts.lp_vault.to_account_info(),
-                    to: ctx.accounts.treasury.to_account_info(),
+                    to: ctx.accounts.withdrawer_token_account.to_account_info(),
                     authority: ctx.accounts.market.to_account_info(),
                     mint: ctx.accounts.underlying_mint.to_account_info(),
                 },
                 signer_seeds,
             ),
-            fee,
+            net_amount,
             ctx.accounts.underlying_mint.decimals,
         )?;
+
+        if fee > 0 {
+            transfer_checked(
+                CpiContext::new_with_signer(
+                    ctx.accounts.token_program.to_account_info(),
+                    TransferChecked {
+                        from: ctx.accounts.lp_vault.to_account_info(),
+                        to: ctx.accounts.treasury.to_account_info(),
+                        authority: ctx.accounts.market.to_account_info(),
+                        mint: ctx.accounts.underlying_mint.to_account_info(),
+                    },
+                    signer_seeds,
+                ),
+                fee,
+                ctx.accounts.underlying_mint.decimals,
+            )?;
+        }
+
+        let market = &mut ctx.accounts.market;
+        market.total_lp_deposits = market.total_lp_deposits
+            .checked_sub(gross_amount)
+            .ok_or(AnemoneError::MathOverflow)?;
+        market.total_lp_shares = market.total_lp_shares
+            .checked_sub(shares_to_burn)
+            .ok_or(AnemoneError::MathOverflow)?;
+
+        let lp_position = &mut ctx.accounts.lp_position;
+        lp_position.shares = lp_position.shares
+            .checked_sub(shares_to_burn)
+            .ok_or(AnemoneError::MathOverflow)?;
+
+        if lp_position.shares == 0 {
+            lp_position.status = LpStatus::Withdrawn;
+        }
+
+        msg!("Withdrawal fast path: {} shares -> {} USDC (fee: {})", shares_to_burn, net_amount, fee);
+    } else {
+        // Queue path — vault is short. Lock in the gross amount and wait for
+        // the keeper to refill the vault from Kamino. LP calls claim_withdrawal
+        // once the balance is back up.
+        let market = &mut ctx.accounts.market;
+        market.total_lp_shares = market.total_lp_shares
+            .checked_sub(shares_to_burn)
+            .ok_or(AnemoneError::MathOverflow)?;
+        market.pending_withdrawals = market.pending_withdrawals
+            .checked_add(gross_amount)
+            .ok_or(AnemoneError::MathOverflow)?;
+
+        let lp_position = &mut ctx.accounts.lp_position;
+        lp_position.shares = lp_position.shares
+            .checked_sub(shares_to_burn)
+            .ok_or(AnemoneError::MathOverflow)?;
+        lp_position.status = LpStatus::PendingWithdrawal;
+        lp_position.withdrawal_amount = gross_amount;
+        lp_position.withdrawal_requested_at = Clock::get()?.unix_timestamp;
+
+        msg!(
+            "Withdrawal queued: {} shares -> {} USDC pending (vault had {})",
+            shares_to_burn,
+            gross_amount,
+            vault_balance,
+        );
     }
-
-    // Step 7: Update market state
-    let market = &mut ctx.accounts.market;
-    market.total_lp_deposits = market.total_lp_deposits
-        .checked_sub(gross_amount)
-        .ok_or(AnemoneError::MathOverflow)?;
-    market.total_lp_shares = market.total_lp_shares
-        .checked_sub(shares_to_burn)
-        .ok_or(AnemoneError::MathOverflow)?;
-
-    // Update LP position
-    let lp_position = &mut ctx.accounts.lp_position;
-    lp_position.shares = lp_position.shares
-        .checked_sub(shares_to_burn)
-        .ok_or(AnemoneError::MathOverflow)?;
-
-    if lp_position.shares == 0 {
-        lp_position.status = LpStatus::Withdrawn;
-    }
-
-    msg!("Withdrawal: {} shares -> {} USDC (fee: {})", shares_to_burn, net_amount, fee);
 
     Ok(())
 }

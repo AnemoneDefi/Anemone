@@ -4,6 +4,7 @@ import { createClient } from "./client";
 import { runUpdateRate } from "./jobs/updateRate";
 import { runSettlement } from "./jobs/settlement";
 import { runLiquidation } from "./jobs/liquidation";
+import { runPendingWithdrawals } from "./jobs/pendingWithdrawals";
 import { logger } from "./utils/logger";
 
 async function main() {
@@ -39,10 +40,18 @@ async function main() {
     void runLiquidation(client, config);
   });
 
+  // pendingWithdrawals: every 2 min. Detects LPs queued behind a shallow
+  // lp_vault and refills via withdraw_from_kamino when needed.
+  cron.schedule("*/2 * * * *", () => {
+    logger.debug("cron: pendingWithdrawals tick");
+    void runPendingWithdrawals(client, config);
+  });
+
   // Run all jobs once on startup so we don't wait for the first cron tick.
   await runUpdateRate(client, config);
   await runSettlement(client, config);
   await runLiquidation(client, config);
+  await runPendingWithdrawals(client, config);
 
   logger.info("keeper: ready (cron scheduled)");
 

@@ -605,6 +605,38 @@ describe("anemone", () => {
         console.log("Insufficient shares correctly rejected ✓");
       }
     });
+
+    it("rejects claim_withdrawal when LP has no pending withdrawal", async () => {
+      // At this point the LP still has shares and status == Active (fast-path
+      // withdrawal earlier left them active because shares > 0). Claiming a
+      // withdrawal that was never requested must fail cleanly.
+      try {
+        await program.methods
+          .claimWithdrawal()
+          .accountsStrict({
+            protocolState: protocolStatePda,
+            market: marketPda,
+            lpPosition: lpPositionPda,
+            lpVault: lpVaultPda,
+            underlyingMint: underlyingMint.publicKey,
+            withdrawerTokenAccount: depositorTokenAccount,
+            treasury: treasury.publicKey,
+            withdrawer: authority.publicKey,
+            tokenProgram: TOKEN_PROGRAM_ID,
+          })
+          .rpc();
+        assert.fail("Should have rejected — no pending withdrawal");
+      } catch (err: any) {
+        assert.include(err.toString(), "NoPendingWithdrawal");
+        console.log("claim_withdrawal correctly rejected for Active LP ✓");
+      }
+    });
+
+    // Full queue-path testing (lp_vault drained → request queues → keeper
+    // refills via withdraw_from_kamino → claim succeeds) requires the Kamino
+    // CPI to be callable, which is only possible under the Surfpool mainnet
+    // fork. Those tests live in the Surfpool suite added in Day 21. Here we
+    // cover the state-machine rejections that don't require a drained vault.
   });
 
   describe("open_swap", () => {

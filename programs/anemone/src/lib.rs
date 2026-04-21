@@ -72,6 +72,10 @@ pub mod anemone {
         instructions::lp::request_withdrawal::handle_request_withdrawal(ctx, shares_to_burn)
     }
 
+    pub fn claim_withdrawal(ctx: Context<ClaimWithdrawal>) -> Result<()> {
+        instructions::lp::claim_withdrawal::handle_claim_withdrawal(ctx)
+    }
+
     pub fn deposit_to_kamino(ctx: Context<DepositToKamino>, amount: u64) -> Result<()> {
         instructions::keeper::deposit_to_kamino::handle_deposit_to_kamino(ctx, amount)
     }
