@@ -3,6 +3,7 @@ use anchor_lang::prelude::*;
 #[account]
 pub struct ProtocolState {
     pub authority: Pubkey,
+    pub keeper_authority: Pubkey,
     pub treasury: Pubkey,
     pub total_markets: u64,
     /// 10% performance fee on LP spread (1000 = 10%)
@@ -21,6 +22,7 @@ pub struct ProtocolState {
 impl ProtocolState {
     pub const SIZE: usize = 8  // discriminator
         + 32  // authority
+        + 32  // keeper_authority
         + 32  // treasury
         + 8   // total_markets
         + 2   // protocol_fee_bps

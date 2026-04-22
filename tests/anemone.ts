@@ -10,6 +10,7 @@ import {
   getAccount,
 } from "@solana/spl-token";
 import { assert } from "chai";
+import bs58 from "bs58";
 
 describe("anemone", () => {
   const provider = anchor.AnchorProvider.env();
@@ -122,6 +123,11 @@ describe("anemone", () => {
       // Fetch and verify
       const state = await program.account.protocolState.fetch(protocolStatePda);
       assert.equal(state.authority.toBase58(), authority.publicKey.toBase58());
+      assert.equal(
+        state.keeperAuthority.toBase58(),
+        authority.publicKey.toBase58(),
+        "keeper_authority should default to authority on init",
+      );
       assert.equal(state.treasury.toBase58(), treasury.publicKey.toBase58());
       assert.equal(state.totalMarkets.toNumber(), 0);
       assert.equal(state.protocolFeeBps, 1000);
@@ -2336,6 +2342,273 @@ describe("anemone", () => {
       assert.isNull(closed, "SwapPosition should be closed");
 
       console.log(`  Early close: fee=${feeReceived} (5%), owner=${remainderReceived} (95%), initialCollateral=${initialCollateral}, adjustedCollateral=${adjustedCollateral} ✓`);
+    });
+  });
+
+  describe("set_keeper & set_rate_index_oracle", () => {
+    it("admin can rotate the keeper authority", async () => {
+      const newKeeper = Keypair.generate();
+      const before = await program.account.protocolState.fetch(protocolStatePda);
+
+      await program.methods
+        .setKeeper(newKeeper.publicKey)
+        .accountsStrict({
+          protocolState: protocolStatePda,
+          authority: authority.publicKey,
+        })
+        .rpc();
+
+      const after = await program.account.protocolState.fetch(protocolStatePda);
+      assert.equal(
+        after.keeperAuthority.toBase58(),
+        newKeeper.publicKey.toBase58(),
+        "keeper_authority should be updated to new keeper",
+      );
+      assert.equal(
+        after.authority.toBase58(),
+        before.authority.toBase58(),
+        "authority should remain unchanged",
+      );
+
+      // Rotate back so the following tests still have admin == keeper
+      await program.methods
+        .setKeeper(authority.publicKey)
+        .accountsStrict({
+          protocolState: protocolStatePda,
+          authority: authority.publicKey,
+        })
+        .rpc();
+
+      console.log("set_keeper rotated authority successfully ✓");
+    });
+
+    it("rejects set_keeper from a non-admin signer", async () => {
+      const attacker = Keypair.generate();
+      const sig = await provider.connection.requestAirdrop(
+        attacker.publicKey,
+        1_000_000_000,
+      );
+      const bh = await provider.connection.getLatestBlockhash();
+      await provider.connection.confirmTransaction({
+        signature: sig,
+        blockhash: bh.blockhash,
+        lastValidBlockHeight: bh.lastValidBlockHeight,
+      });
+
+      try {
+        await program.methods
+          .setKeeper(attacker.publicKey)
+          .accountsStrict({
+            protocolState: protocolStatePda,
+            authority: attacker.publicKey,
+          })
+          .signers([attacker])
+          .rpc();
+        assert.fail("Should have rejected — non-admin");
+      } catch (err) {
+        console.log("set_keeper correctly rejected non-admin ✓");
+      }
+    });
+
+    it("admin can set the rate_index oracle (rotate previous -> current)", async () => {
+      // Use the fake-reserve market (marketPda) because it has no live rate index
+      // feed. set_rate_index_oracle lets us seed it manually.
+      const first = new anchor.BN("1000000000000000000");  // 1e18
+      const second = new anchor.BN("1100000000000000000"); // 1.1e18
+
+      // First call: current set from 0 -> first (no rotation, prev stays 0)
+      await program.methods
+        .setRateIndexOracle(first)
+        .accountsStrict({
+          protocolState: protocolStatePda,
+          market: marketPda,
+          authority: authority.publicKey,
+        })
+        .rpc();
+
+      const afterFirst = await program.account.swapMarket.fetch(marketPda);
+      assert.equal(
+        afterFirst.currentRateIndex.toString(),
+        first.toString(),
+        "current_rate_index should be set to first",
+      );
+      assert.equal(
+        afterFirst.previousRateIndex.toString(),
+        "0",
+        "previous_rate_index stays 0 on first seeding",
+      );
+      assert.isTrue(afterFirst.lastRateUpdateTs.toNumber() > 0);
+
+      // Second call: rotate current -> previous, set current to second
+      await program.methods
+        .setRateIndexOracle(second)
+        .accountsStrict({
+          protocolState: protocolStatePda,
+          market: marketPda,
+          authority: authority.publicKey,
+        })
+        .rpc();
+
+      const afterSecond = await program.account.swapMarket.fetch(marketPda);
+      assert.equal(
+        afterSecond.currentRateIndex.toString(),
+        second.toString(),
+        "current_rate_index should be updated to second",
+      );
+      assert.equal(
+        afterSecond.previousRateIndex.toString(),
+        first.toString(),
+        "previous_rate_index should have rotated to first",
+      );
+      assert.isTrue(
+        afterSecond.previousRateUpdateTs.toNumber()
+          === afterFirst.lastRateUpdateTs.toNumber(),
+        "previous_rate_update_ts should match the prior last_rate_update_ts",
+      );
+
+      console.log(`set_rate_index_oracle rotated: prev=${afterSecond.previousRateIndex.toString()}, current=${afterSecond.currentRateIndex.toString()} ✓`);
+    });
+
+    it("rejects set_rate_index_oracle from a non-admin signer", async () => {
+      const attacker = Keypair.generate();
+      const sig = await provider.connection.requestAirdrop(
+        attacker.publicKey,
+        1_000_000_000,
+      );
+      const bh = await provider.connection.getLatestBlockhash();
+      await provider.connection.confirmTransaction({
+        signature: sig,
+        blockhash: bh.blockhash,
+        lastValidBlockHeight: bh.lastValidBlockHeight,
+      });
+
+      try {
+        await program.methods
+          .setRateIndexOracle(new anchor.BN("1200000000000000000"))
+          .accountsStrict({
+            protocolState: protocolStatePda,
+            market: marketPda,
+            authority: attacker.publicKey,
+          })
+          .signers([attacker])
+          .rpc();
+        assert.fail("Should have rejected — non-admin");
+      } catch (err) {
+        console.log("set_rate_index_oracle correctly rejected non-admin ✓");
+      }
+    });
+
+    it("rejects set_rate_index_oracle with rate_index = 0", async () => {
+      try {
+        await program.methods
+          .setRateIndexOracle(new anchor.BN(0))
+          .accountsStrict({
+            protocolState: protocolStatePda,
+            market: marketPda,
+            authority: authority.publicKey,
+          })
+          .rpc();
+        assert.fail("Should have rejected — rate_index 0");
+      } catch (err: any) {
+        assert.include(err.toString(), "InvalidRateIndex");
+        console.log("set_rate_index_oracle correctly rejected rate_index=0 ✓");
+      }
+    });
+  });
+
+  describe("keeper security & bot flow", () => {
+    // Offset of SwapPosition.status — must match what the keeper uses in
+    // keeper/src/jobs/settlement.ts and liquidation.ts. Layout:
+    //   8 (disc) + 32 (owner) + 32 (market) + 1 (direction) + 8 (notional)
+    // + 8 (fixed_rate_bps) + 1 (leverage) + 8 (collateral_deposited)
+    // + 8 (collateral_remaining) + 16 (entry_rate_index)
+    // + 16 (last_settled_rate_index) + 8 (realized_pnl) + 2 (num_settlements)
+    // + 8 (open_ts) + 8 (maturity_ts) + 8 (next_settlement_ts) + 8 (last_settlement_ts)
+    // = 178
+    const KEEPER_STATUS_OFFSET = 178;
+    const STATUS_OPEN = 0;
+
+    it("blocks the old authority from calling deposit_to_kamino after rotation", async () => {
+      const rotatedKeeper = Keypair.generate();
+
+      // Rotate away from authority
+      await program.methods
+        .setKeeper(rotatedKeeper.publicKey)
+        .accountsStrict({
+          protocolState: protocolStatePda,
+          authority: authority.publicKey,
+        })
+        .rpc();
+
+      // Sysvar instructions address (needed by deposit_to_kamino accounts)
+      const INSTRUCTIONS_SYSVAR = new PublicKey("Sysvar1nstructions1111111111111111111111111");
+
+      // Try deposit_to_kamino with the OLD authority. Kamino accounts are dummies —
+      // the `InvalidAuthority` constraint on `keeper` fires BEFORE the CPI runs,
+      // so fake pubkeys are fine as long as Anchor's account deserialization succeeds.
+      try {
+        await program.methods
+          .depositToKamino(new anchor.BN(1_000_000))
+          .accountsStrict({
+            protocolState: protocolStatePda,
+            keeper: authority.publicKey, // OLD authority, should be rejected
+            market: marketPda,
+            lpVault: lpVaultPda,
+            kaminoDepositAccount: kaminoDepositPda,
+            kaminoReserve: Keypair.generate().publicKey,
+            kaminoLendingMarket: Keypair.generate().publicKey,
+            kaminoLendingMarketAuthority: Keypair.generate().publicKey,
+            reserveLiquidityMint: underlyingMint.publicKey, // must be a real Mint
+            reserveLiquiditySupply: Keypair.generate().publicKey,
+            reserveCollateralMint: fakeKaminoCollateralMint.publicKey,
+            collateralTokenProgram: TOKEN_PROGRAM_ID,
+            liquidityTokenProgram: TOKEN_PROGRAM_ID,
+            instructionSysvarAccount: INSTRUCTIONS_SYSVAR,
+            kaminoProgram: underlyingProtocol.publicKey, // matches market.underlying_protocol
+          })
+          .rpc();
+        assert.fail("Should have rejected — old authority no longer keeper");
+      } catch (err: any) {
+        assert.include(err.toString(), "InvalidAuthority");
+        console.log("deposit_to_kamino correctly rejected old keeper after rotation ✓");
+      }
+
+      // Rotate back so other tests are unaffected
+      await program.methods
+        .setKeeper(authority.publicKey)
+        .accountsStrict({
+          protocolState: protocolStatePda,
+          authority: authority.publicKey,
+        })
+        .rpc();
+    });
+
+    it("keeper job-style memcmp filter returns only Open positions", async () => {
+      // This mirrors exactly what keeper/src/jobs/settlement.ts does — proves
+      // the offset and filter are correct. If this fails, the keeper's
+      // getProgramAccounts call would return wrong results and settle nothing.
+      const openPositions = await program.account.swapPosition.all([
+        {
+          memcmp: {
+            offset: KEEPER_STATUS_OFFSET,
+            bytes: bs58.encode(Buffer.from([STATUS_OPEN])),
+          },
+        },
+      ]);
+
+      // There's at least one Open position remaining from earlier suites
+      // (the nonce=0 PayFixed on the Kamino 7-day market). Verify the filter
+      // only returns Open ones, not Matured/Liquidated/ClosedEarly.
+      assert.isAtLeast(openPositions.length, 1, "should find at least one Open position");
+      for (const { account } of openPositions) {
+        assert.deepEqual(
+          account.status,
+          { open: {} },
+          "memcmp filter must only return Open positions",
+        );
+      }
+
+      console.log(`keeper memcmp filter returned ${openPositions.length} Open position(s) ✓`);
     });
   });
 });

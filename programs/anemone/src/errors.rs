@@ -40,4 +40,6 @@ pub enum AnemoneError {
     PositionNotMatured,
     #[msg("Position is above maintenance margin — cannot liquidate")]
     AboveMaintenanceMargin,
+    #[msg("Invalid authority — caller is not the protocol keeper")]
+    InvalidAuthority,
 }

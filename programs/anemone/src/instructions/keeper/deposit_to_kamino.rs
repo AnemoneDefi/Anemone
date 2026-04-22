@@ -9,11 +9,14 @@ pub struct DepositToKamino<'info> {
     #[account(
         seeds = [b"protocol"],
         bump = protocol_state.bump,
-        has_one = authority,
     )]
     pub protocol_state: Account<'info, ProtocolState>,
 
-    pub authority: Signer<'info>,
+    #[account(
+        constraint = keeper.key() == protocol_state.keeper_authority
+            @ AnemoneError::InvalidAuthority,
+    )]
+    pub keeper: Signer<'info>,
 
     #[account(
         mut,
