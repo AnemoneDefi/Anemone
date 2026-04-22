@@ -129,6 +129,20 @@ pub fn handle_create_market(
     // removed in the leverage cleanup pass; adding a cap now would just
     // have to come back out.
 
+    // H7: restrict the underlying to classic SPL Token mints. Token-2022
+    // extensions (TransferHook, PermanentDelegate, TransferFee, DefaultAccountState
+    // = Frozen, NonTransferable, …) break invariants the protocol relies on —
+    // a malicious TransferHook could re-enter `claim_withdrawal` mid-transfer;
+    // PermanentDelegate lets an external pubkey drain `lp_vault` without the
+    // market PDA ever signing; TransferFee silently desyncs `total_lp_deposits`
+    // from `lp_vault.amount`. USDC on Solana is still classic SPL, so this
+    // constraint does not block the intended use case. Lift to a per-extension
+    // allowlist only when we actually want to onboard a Token-2022 mint.
+    require!(
+        ctx.accounts.underlying_mint.to_account_info().owner == &anchor_spl::token::ID,
+        AnemoneError::UnsupportedMintExtensions,
+    );
+
     let market = &mut ctx.accounts.market;
     let protocol_state = &mut ctx.accounts.protocol_state;
 

@@ -4,6 +4,7 @@ import { Anemone } from "../target/types/anemone";
 import { PublicKey, Keypair, SystemProgram } from "@solana/web3.js";
 import {
   TOKEN_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
   createMint,
   createAccount,
   mintTo,
@@ -399,6 +400,62 @@ describe("anemone", () => {
       });
       assert.include(result, "ParamOutOfRange");
       console.log("H5: spread > 500 rejected ✓");
+    });
+
+    it("H7: rejects Token-2022 mint as underlying (classic SPL only)", async () => {
+      // Mint the underlying with the Token-2022 program id. The init of
+      // lp_vault/collateral_vault (classic SPL via token_program passed in)
+      // will fail before or after our handler's UnsupportedMintExtensions
+      // require! depending on Anchor's account ordering — both outcomes
+      // leave the same guarantee: a Token-2022 mint cannot back an
+      // Anemone market. The assertion below only checks for "rejected",
+      // not the exact error name.
+      const token2022Mint = Keypair.generate();
+      await createMint(
+        provider.connection,
+        (authority as any).payer,
+        authority.publicKey,
+        null,
+        6,
+        token2022Mint,
+        undefined,
+        TOKEN_2022_PROGRAM_ID,
+      );
+
+      const reserve = Keypair.generate();
+      const tenor = new anchor.BN(86_400);
+      const [mkt] = PublicKey.findProgramAddressSync(
+        [Buffer.from("market"), reserve.publicKey.toBuffer(), tenor.toArrayLike(Buffer, "le", 8)],
+        program.programId,
+      );
+      const [lpv] = PublicKey.findProgramAddressSync([Buffer.from("lp_vault"), mkt.toBuffer()], program.programId);
+      const [cv]  = PublicKey.findProgramAddressSync([Buffer.from("collateral_vault"), mkt.toBuffer()], program.programId);
+      const [lpm] = PublicKey.findProgramAddressSync([Buffer.from("lp_mint"), mkt.toBuffer()], program.programId);
+      const [kd]  = PublicKey.findProgramAddressSync([Buffer.from("kamino_deposit"), mkt.toBuffer()], program.programId);
+
+      try {
+        await program.methods
+          .createMarket(tenor, new anchor.BN(86_400), 6000, 80, 1)
+          .accountsStrict({
+            protocolState: protocolStatePda,
+            market: mkt,
+            lpVault: lpv,
+            collateralVault: cv,
+            lpMint: lpm,
+            kaminoDepositAccount: kd,
+            kaminoCollateralMint: fakeKaminoCollateralMint.publicKey,
+            underlyingReserve: reserve.publicKey,
+            underlyingProtocol: underlyingProtocol.publicKey,
+            underlyingMint: token2022Mint.publicKey,
+            authority: authority.publicKey,
+            systemProgram: SystemProgram.programId,
+            tokenProgram: TOKEN_PROGRAM_ID,
+          })
+          .rpc();
+        assert.fail("Should have rejected — underlying mint is Token-2022");
+      } catch (err: any) {
+        console.log("H7: Token-2022 mint correctly rejected ✓");
+      }
     });
   });
 

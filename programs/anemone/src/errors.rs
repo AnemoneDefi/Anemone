@@ -50,4 +50,6 @@ pub enum AnemoneError {
     RateMoveTooLarge,
     #[msg("Parameter exceeds its protocol-level safety cap")]
     ParamOutOfRange,
+    #[msg("Mint uses an unsupported token program (only classic SPL Token allowed in v1)")]
+    UnsupportedMintExtensions,
 }
