@@ -46,4 +46,6 @@ pub enum AnemoneError {
     NoPendingWithdrawal,
     #[msg("LP vault liquidity is insufficient for this claim — keeper must rebalance")]
     InsufficientVaultLiquidity,
+    #[msg("Rate index growth between settlements exceeds the circuit-breaker cap")]
+    RateMoveTooLarge,
 }

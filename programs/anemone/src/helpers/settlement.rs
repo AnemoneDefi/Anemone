@@ -2,6 +2,23 @@ use crate::errors::AnemoneError;
 use crate::state::SwapDirection;
 use crate::helpers::calculate_initial_margin;
 
+/// Maximum tolerated growth of `rate_index` between two settlements, in bps
+/// of the prior index value. 500 bps = 5%.
+///
+/// Calibration. At the 10-minute keeper cadence there are ~52,560 periods/yr.
+/// A 1000% APY market grows the index by ~2 bps per period. A move of 500+
+/// bps in a single period is not consistent with any realistic rate — it
+/// points to a corrupted oracle input (Kamino crate layout drift, flash-loan
+/// manipulation of reserve utilization, buggy stub push). When it trips,
+/// `settle_period` aborts instead of paying phantom PnL out of the LP vault.
+///
+/// If a settlement legitimately arrives very late (keeper was down for hours)
+/// and accumulated growth exceeds the cap, the operator must settle at a
+/// finer granularity first or manually inspect the rate index before
+/// resuming. The margin of safety (500 bps is ~250x the worst realistic
+/// per-period growth) makes this path exceptionally rare.
+pub const MAX_PERIOD_GROWTH_BPS: u128 = 500;
+
 /// Calculates the PnL for a single settlement period using exact rate index values.
 ///
 /// Uses rate index division (exact compounded rate), NOT Taylor approximation.
@@ -21,6 +38,18 @@ pub fn calculate_period_pnl(
     }
     if settlement_period_seconds <= 0 {
         return Err(AnemoneError::InvalidElapsedTime);
+    }
+
+    // Circuit breaker — see MAX_PERIOD_GROWTH_BPS doc for the calibration.
+    let delta = current_rate_index
+        .checked_sub(last_settled_rate_index)
+        .ok_or(AnemoneError::MathOverflow)?;
+    let growth_bps = delta
+        .checked_mul(10_000)
+        .and_then(|v| v.checked_div(last_settled_rate_index))
+        .ok_or(AnemoneError::MathOverflow)?;
+    if growth_bps > MAX_PERIOD_GROWTH_BPS {
+        return Err(AnemoneError::RateMoveTooLarge);
     }
 
     const SECONDS_PER_YEAR: u128 = 31_536_000;
@@ -197,6 +226,79 @@ mod tests {
             ONE_DAY,
         );
         assert!(result.is_err(), "Should reject decreasing rate index");
+    }
+
+    // ========== MAX_PERIOD_GROWTH_BPS circuit breaker tests ==========
+
+    #[test]
+    fn circuit_breaker_rejects_rate_doubling() {
+        // 100% growth in one period — clearly pathological (Kamino bug or
+        // oracle manipulation). Must abort with RateMoveTooLarge, not just
+        // return a huge PnL.
+        let result = calculate_period_pnl(
+            SwapDirection::PayFixed,
+            NOTIONAL_10K,
+            800,
+            index(1.0),
+            index(2.0),
+            ONE_DAY,
+        );
+        assert!(matches!(result, Err(AnemoneError::RateMoveTooLarge)),
+            "Expected RateMoveTooLarge for 100% growth, got {:?}", result);
+    }
+
+    #[test]
+    fn circuit_breaker_rejects_just_over_cap() {
+        // 501 bps (5.01%) growth — one bp over the cap, should trip.
+        // last = 10_000, delta = 501 → growth_bps = 501.
+        let last = 10_000u128;
+        let current = last + 501;
+        let result = calculate_period_pnl(
+            SwapDirection::PayFixed,
+            NOTIONAL_10K,
+            800,
+            last,
+            current,
+            ONE_DAY,
+        );
+        assert!(matches!(result, Err(AnemoneError::RateMoveTooLarge)),
+            "Expected RateMoveTooLarge at 501 bps, got {:?}", result);
+    }
+
+    #[test]
+    fn circuit_breaker_accepts_exactly_at_cap() {
+        // Exactly 500 bps growth — on the cap, should still pass (we use `>`).
+        let last = 10_000u128;
+        let current = last + 500; // growth_bps = 500
+        let result = calculate_period_pnl(
+            SwapDirection::PayFixed,
+            NOTIONAL_10K,
+            800,
+            last,
+            current,
+            ONE_DAY,
+        );
+        assert!(result.is_ok(),
+            "Growth exactly at the cap should be accepted, got {:?}", result);
+    }
+
+    #[test]
+    fn circuit_breaker_passes_realistic_growth() {
+        // 1000% APY at 10-min period ≈ 2 bps growth — wildly inside the cap.
+        // This sanity-checks the calibration: even extreme but real markets
+        // must not trip the breaker.
+        let last = 1_000_000_000_000u128;
+        let current = last + (last * 2 / 10_000); // 2 bps of growth
+        let result = calculate_period_pnl(
+            SwapDirection::PayFixed,
+            NOTIONAL_10K,
+            800,
+            last,
+            current,
+            600, // 10 minutes
+        );
+        assert!(result.is_ok(),
+            "1000% APY / 10-min should pass; got {:?}", result);
     }
 
     #[test]
