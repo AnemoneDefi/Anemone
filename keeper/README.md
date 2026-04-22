@@ -59,3 +59,18 @@ without depending on a live lending protocol.
 
 The default increment (1e12) bumps the rate index enough per 3-minute tick
 that `calculate_current_apy_from_index` produces an APY on the order of 10-15%.
+
+### Feature gating (mainnet safety)
+
+`set_rate_index_oracle` only exists in builds that include the `stub-oracle`
+Cargo feature. That feature is **default-on** for dev/devnet. Mainnet deploys
+must explicitly opt out:
+
+```
+anchor build -- --no-default-features   # or: yarn build:mainnet
+```
+
+Belt-and-suspenders: the keeper refuses to start with `USE_STUB_ORACLE=true` if
+`RPC_URL` looks like mainnet (see `MAINNET_RPC_SUBSTRINGS` in `src/config.ts`).
+A mainnet program simply does not contain the instruction — calling it returns
+`InstructionFallbackNotFound`.

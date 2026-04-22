@@ -36,12 +36,37 @@ function required(name: string): string {
   return v;
 }
 
+// Hosts that are known-mainnet. If USE_STUB_ORACLE=true points at one of these,
+// we bail out — on mainnet the program is built with --no-default-features, so
+// `set_rate_index_oracle` does not exist. Calling it would just fail with
+// InstructionFallbackNotFound, but failing config load is clearer.
+const MAINNET_RPC_SUBSTRINGS = [
+  "mainnet-beta",
+  "mainnet.helius",
+  "rpc.ankr.com/solana",
+  "api.mainnet-beta.solana.com",
+  "solana-mainnet",
+];
+
 export function loadConfig(): KeeperConfig {
   const rpcUrl = required("RPC_URL");
   const programId = new PublicKey(required("PROGRAM_ID"));
   const marketPda = new PublicKey(required("MARKET_PDA"));
   const kaminoReserve = new PublicKey(required("KAMINO_RESERVE"));
   const useStubOracle = (process.env.USE_STUB_ORACLE || "true") === "true";
+
+  if (useStubOracle) {
+    const lower = rpcUrl.toLowerCase();
+    for (const host of MAINNET_RPC_SUBSTRINGS) {
+      if (lower.includes(host)) {
+        throw new Error(
+          `USE_STUB_ORACLE=true but RPC_URL (${rpcUrl}) looks like mainnet. ` +
+            `Mainnet builds must have the stub-oracle feature disabled — set ` +
+            `USE_STUB_ORACLE=false or point at devnet/localnet.`,
+        );
+      }
+    }
+  }
   const stubRateIncrement = BigInt(
     process.env.STUB_RATE_INCREMENT || "1000000000000",
   );

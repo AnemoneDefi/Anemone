@@ -53,6 +53,11 @@ pub mod anemone {
         instructions::admin::set_keeper::handle_set_keeper(ctx, new_keeper)
     }
 
+    /// Admin-only stub for clusters where Kamino K-Lend is not deployed
+    /// (localnet/devnet). Feature-gated so mainnet builds do NOT include it —
+    /// see [features] in programs/anemone/Cargo.toml. On mainnet, rate index
+    /// comes exclusively from `update_rate_index` reading Kamino state.
+    #[cfg(feature = "stub-oracle")]
     pub fn set_rate_index_oracle(
         ctx: Context<SetRateIndexOracle>,
         rate_index: u128,

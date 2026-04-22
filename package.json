@@ -2,7 +2,9 @@
   "license": "ISC",
   "scripts": {
     "lint:fix": "prettier */*.js \"*/**/*{.js,.ts}\" -w",
-    "lint": "prettier */*.js \"*/**/*{.js,.ts}\" --check"
+    "lint": "prettier */*.js \"*/**/*{.js,.ts}\" --check",
+    "build:mainnet": "anchor build -- --no-default-features",
+    "deploy:mainnet": "echo 'Refuse to deploy until multisig runbook is followed — see docs/security-remediation-plan.md §Fase 5.' && exit 1"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.32.1",
