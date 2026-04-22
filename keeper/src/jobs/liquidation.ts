@@ -11,7 +11,7 @@ import { calculateMaintenanceMargin } from "../utils/margin";
 import { priorityFeeInstructions } from "../utils/priorityFee";
 import { logger } from "../utils/logger";
 
-const STATUS_OFFSET = 178; // see settlement.ts for layout
+const STATUS_OFFSET = 177; // see settlement.ts for layout
 const STATUS_OPEN = 0;
 const TOKEN_PROGRAM = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 

@@ -112,7 +112,6 @@ pub fn handle_create_market(
     settlement_period_seconds: i64,
     max_utilization_bps: u16,
     base_spread_bps: u16,
-    max_leverage: u8,
 ) -> Result<()> {
     require!(tenor_seconds > 0, AnemoneError::ParamOutOfRange);
     require!(
@@ -124,10 +123,6 @@ pub fn handle_create_market(
         AnemoneError::ParamOutOfRange,
     );
     require!(base_spread_bps <= MAX_BASE_SPREAD_BPS, AnemoneError::ParamOutOfRange);
-    // `max_leverage` is not capped here — the field is dead code in v1
-    // (`position.leverage = 1` is hardcoded in open_swap). It will be
-    // removed in the leverage cleanup pass; adding a cap now would just
-    // have to come back out.
 
     // H7: restrict the underlying to classic SPL Token mints. Token-2022
     // extensions (TransferHook, PermanentDelegate, TransferFee, DefaultAccountState
@@ -163,7 +158,6 @@ pub fn handle_create_market(
     market.settlement_period_seconds = settlement_period_seconds;
     market.max_utilization_bps = max_utilization_bps;
     market.base_spread_bps = base_spread_bps;
-    market.max_leverage = max_leverage;
 
     // State (all zeros on creation)
     market.total_lp_deposits = 0;
@@ -186,8 +180,8 @@ pub fn handle_create_market(
     // Increment market counter
     protocol_state.total_markets += 1;
 
-    msg!("Market created: tenor={}s, spread={}bps, max_util={}bps, max_lev={}x",
-        tenor_seconds, base_spread_bps, max_utilization_bps, max_leverage);
+    msg!("Market created: tenor={}s, spread={}bps, max_util={}bps",
+        tenor_seconds, base_spread_bps, max_utilization_bps);
 
     Ok(())
 }

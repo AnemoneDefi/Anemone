@@ -20,7 +20,6 @@ pub struct SwapMarket {
     /// 6000 = 60%
     pub max_utilization_bps: u16,
     pub base_spread_bps: u16,
-    pub max_leverage: u8,
 
     // Market state
     pub total_lp_deposits: u64,
@@ -54,7 +53,6 @@ impl SwapMarket {
         + 8    // settlement_period_seconds
         + 2    // max_utilization_bps
         + 2    // base_spread_bps
-        + 1    // max_leverage
         + 8    // total_lp_deposits
         + 8    // total_lp_shares
         + 8    // total_fixed_notional

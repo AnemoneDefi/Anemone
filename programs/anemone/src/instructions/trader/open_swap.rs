@@ -245,7 +245,6 @@ pub fn handle_open_swap(
     position.direction = direction;
     position.notional = notional;
     position.fixed_rate_bps = fixed_rate_bps;
-    position.leverage = 1;
     position.collateral_deposited = margin;
     position.collateral_remaining = margin;
     position.entry_rate_index = market.current_rate_index;

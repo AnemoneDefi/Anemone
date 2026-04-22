@@ -37,7 +37,6 @@ pub mod anemone {
         settlement_period_seconds: i64,
         max_utilization_bps: u16,
         base_spread_bps: u16,
-        max_leverage: u8,
     ) -> Result<()> {
         instructions::admin::create_market::handle_create_market(
             ctx,
@@ -45,7 +44,6 @@ pub mod anemone {
             settlement_period_seconds,
             max_utilization_bps,
             base_spread_bps,
-            max_leverage,
         )
     }
 

@@ -11,12 +11,12 @@ import { logger } from "../utils/logger";
 // Anchor serializes fields in declaration order; see state/position.rs.
 //
 // Layout: 8 (disc) + 32 (owner) + 32 (market) + 1 (direction) + 8 (notional)
-//       + 8 (fixed_rate_bps) + 1 (leverage) + 8 (collateral_deposited)
+//       + 8 (fixed_rate_bps) + 8 (collateral_deposited)
 //       + 8 (collateral_remaining) + 16 (entry_rate_index)
 //       + 16 (last_settled_rate_index) + 8 (realized_pnl) + 2 (num_settlements)
 //       + 8 (open_ts) + 8 (maturity_ts) + 8 (next_settlement_ts)
-//       + 8 (last_settlement_ts) = offset 178 for status
-const STATUS_OFFSET = 178;
+//       + 8 (last_settlement_ts) = offset 177 for status
+const STATUS_OFFSET = 177;
 const STATUS_OPEN = 0;
 
 /**

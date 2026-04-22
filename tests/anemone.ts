@@ -193,7 +193,6 @@ describe("anemone", () => {
           new anchor.BN(86_400),
           6000,
           80,
-          20,
         )
         .accountsStrict({
           protocolState: protocolStatePda,
@@ -226,7 +225,6 @@ describe("anemone", () => {
       assert.equal(market.settlementPeriodSeconds.toNumber(), 86_400);
       assert.equal(market.maxUtilizationBps, 6000);
       assert.equal(market.baseSpreadBps, 80);
-      assert.equal(market.maxLeverage, 20);
       assert.equal(market.totalLpDeposits.toNumber(), 0);
       assert.equal(market.totalLpShares.toNumber(), 0);
       assert.equal(market.totalOpenPositions.toNumber(), 0);
@@ -293,7 +291,6 @@ describe("anemone", () => {
             new anchor.BN(86_400),
             6000,
             80,
-            20,
           )
           .accountsStrict({
             protocolState: protocolStatePda,
@@ -327,7 +324,6 @@ describe("anemone", () => {
       settle: anchor.BN;
       util: number;
       spread: number;
-      leverage: number;
     }): Promise<string> {
       // Reuse the already-created fakeKaminoCollateralMint — Anchor's `init`
       // needs a real Mint at that address or simulation aborts before the
@@ -344,7 +340,7 @@ describe("anemone", () => {
 
       try {
         await program.methods
-          .createMarket(params.tenor, params.settle, params.util, params.spread, params.leverage)
+          .createMarket(params.tenor, params.settle, params.util, params.spread)
           .accountsStrict({
             protocolState: protocolStatePda,
             market: mkt,
@@ -372,7 +368,7 @@ describe("anemone", () => {
 
     it("H5: rejects tenor_seconds = 0", async () => {
       const result = await tryCreate({
-        tenor: new anchor.BN(0), settle: new anchor.BN(1), util: 6000, spread: 80, leverage: 1,
+        tenor: new anchor.BN(0), settle: new anchor.BN(1), util: 6000, spread: 80,
       });
       assert.include(result, "ParamOutOfRange");
       console.log("H5: tenor=0 rejected ✓");
@@ -380,7 +376,7 @@ describe("anemone", () => {
 
     it("H5: rejects settlement_period > tenor", async () => {
       const result = await tryCreate({
-        tenor: new anchor.BN(60), settle: new anchor.BN(120), util: 6000, spread: 80, leverage: 1,
+        tenor: new anchor.BN(60), settle: new anchor.BN(120), util: 6000, spread: 80,
       });
       assert.include(result, "ParamOutOfRange");
       console.log("H5: settle > tenor rejected ✓");
@@ -388,7 +384,7 @@ describe("anemone", () => {
 
     it("H5: rejects max_utilization_bps > 9500", async () => {
       const result = await tryCreate({
-        tenor: new anchor.BN(60), settle: new anchor.BN(1), util: 9600, spread: 80, leverage: 1,
+        tenor: new anchor.BN(60), settle: new anchor.BN(1), util: 9600, spread: 80,
       });
       assert.include(result, "ParamOutOfRange");
       console.log("H5: util > 9500 rejected ✓");
@@ -396,7 +392,7 @@ describe("anemone", () => {
 
     it("H5: rejects base_spread_bps > 500", async () => {
       const result = await tryCreate({
-        tenor: new anchor.BN(60), settle: new anchor.BN(1), util: 6000, spread: 501, leverage: 1,
+        tenor: new anchor.BN(60), settle: new anchor.BN(1), util: 6000, spread: 501,
       });
       assert.include(result, "ParamOutOfRange");
       console.log("H5: spread > 500 rejected ✓");
@@ -435,7 +431,7 @@ describe("anemone", () => {
 
       try {
         await program.methods
-          .createMarket(tenor, new anchor.BN(86_400), 6000, 80, 1)
+          .createMarket(tenor, new anchor.BN(86_400), 6000, 80)
           .accountsStrict({
             protocolState: protocolStatePda,
             market: mkt,
@@ -516,7 +512,6 @@ describe("anemone", () => {
           new anchor.BN(86_400),
           6000,
           80,
-          20,
         )
         .accountsStrict({
           protocolState: protocolStatePda,
@@ -885,7 +880,6 @@ describe("anemone", () => {
             new anchor.BN(86_400), // 1 day settlement period
             6000, // 60% max utilization
             80,   // 0.8% base spread
-            20,   // max leverage
           )
           .accountsStrict({
             protocolState: protocolStatePda,
@@ -1041,7 +1035,6 @@ describe("anemone", () => {
       assert.deepEqual(position.direction, { payFixed: {} });
       assert.equal(position.notional.toNumber(), SWAP_NOTIONAL);
       assert.isTrue(position.fixedRateBps.toNumber() > 0, "Fixed rate should be > 0 (at least spread)");
-      assert.equal(position.leverage, 1);
       assert.isTrue(position.collateralDeposited.toNumber() > 0, "Margin should be > 0");
       assert.equal(position.collateralRemaining.toNumber(), position.collateralDeposited.toNumber());
       assert.isTrue(position.entryRateIndex.gt(new anchor.BN(0)));
@@ -1614,7 +1607,6 @@ describe("anemone", () => {
           new anchor.BN(1), // 1 second settlement period
           6000,
           80,
-          20,
         )
         .accountsStrict({
           protocolState: protocolStatePda,
@@ -1891,7 +1883,6 @@ describe("anemone", () => {
           new anchor.BN(1),       // 1s settlement period
           6000,
           500,                    // base spread at the H5 cap (5%)
-          10,                     // max_leverage within dead-code-friendly range
         )
         .accountsStrict({
           protocolState: protocolStatePda,
@@ -2399,7 +2390,6 @@ describe("anemone", () => {
           new anchor.BN(60),  // 1min settlement
           6000,
           80,                 // normal spread
-          20,
         )
         .accountsStrict({
           protocolState: protocolStatePda,
@@ -2752,12 +2742,12 @@ describe("anemone", () => {
     // Offset of SwapPosition.status — must match what the keeper uses in
     // keeper/src/jobs/settlement.ts and liquidation.ts. Layout:
     //   8 (disc) + 32 (owner) + 32 (market) + 1 (direction) + 8 (notional)
-    // + 8 (fixed_rate_bps) + 1 (leverage) + 8 (collateral_deposited)
+    // + 8 (fixed_rate_bps) + 8 (collateral_deposited)
     // + 8 (collateral_remaining) + 16 (entry_rate_index)
     // + 16 (last_settled_rate_index) + 8 (realized_pnl) + 2 (num_settlements)
     // + 8 (open_ts) + 8 (maturity_ts) + 8 (next_settlement_ts) + 8 (last_settlement_ts)
-    // = 178
-    const KEEPER_STATUS_OFFSET = 178;
+    // = 177
+    const KEEPER_STATUS_OFFSET = 177;
     const STATUS_OPEN = 0;
 
     it("blocks the old authority from calling deposit_to_kamino after rotation", async () => {
