@@ -24,6 +24,14 @@ pub const MAX_PERIOD_GROWTH_BPS: u128 = 500;
 /// Uses rate index division (exact compounded rate), NOT Taylor approximation.
 /// Taylor is for quoting/spread; settlement uses the real observed rate.
 ///
+/// `elapsed_seconds` MUST be the real time between `last_settled_rate_index`
+/// and the moment this PnL is realized — not the market's nominal settlement
+/// period. Passing the nominal period when callers settle late creates an
+/// asymmetry the trader can exploit (C1): `variable_payment` scales with
+/// real rate-index growth automatically (the index is monotonic and time-
+/// embedded), while `fixed_payment` is linear in whatever time value we
+/// pass. Mismatch ⇒ the trader pockets the fixed leg he never paid.
+///
 /// Returns i64: positive = trader profit, negative = trader loss.
 pub fn calculate_period_pnl(
     direction: SwapDirection,
@@ -31,12 +39,12 @@ pub fn calculate_period_pnl(
     fixed_rate_bps: u64,
     last_settled_rate_index: u128,
     current_rate_index: u128,
-    settlement_period_seconds: i64,
+    elapsed_seconds: i64,
 ) -> Result<i64, AnemoneError> {
     if last_settled_rate_index == 0 || current_rate_index < last_settled_rate_index {
         return Err(AnemoneError::InvalidRateIndex);
     }
-    if settlement_period_seconds <= 0 {
+    if elapsed_seconds <= 0 {
         return Err(AnemoneError::InvalidElapsedTime);
     }
 
@@ -66,12 +74,12 @@ pub fn calculate_period_pnl(
         .and_then(|v| v.checked_div(last_settled_rate_index))
         .ok_or(AnemoneError::MathOverflow)?;
 
-    // Fixed payment: annualized rate pro-rated to the settlement period
-    // fixed_payment = notional * fixed_rate_bps / BPS_SCALE * period / year
-    // Rewrite as single fraction: notional * fixed_rate_bps * period / (BPS_SCALE * year)
+    // Fixed payment: annualized rate pro-rated to the REAL elapsed time.
+    // fixed_payment = notional * fixed_rate_bps / BPS_SCALE * elapsed / year
+    // Rewrite as single fraction: notional * fixed_rate_bps * elapsed / (BPS_SCALE * year)
     let fixed_payment = n
         .checked_mul(fixed_rate_bps as u128)
-        .and_then(|v| v.checked_mul(settlement_period_seconds as u128))
+        .and_then(|v| v.checked_mul(elapsed_seconds as u128))
         .and_then(|v| v.checked_div(
             BPS_SCALE.checked_mul(SECONDS_PER_YEAR)
                 .ok_or(AnemoneError::MathOverflow).ok()?
@@ -280,6 +288,89 @@ mod tests {
         );
         assert!(result.is_ok(),
             "Growth exactly at the cap should be accepted, got {:?}", result);
+    }
+
+    // ========== C1: elapsed-based fixed_payment tests ==========
+
+    #[test]
+    fn fixed_payment_scales_linearly_with_elapsed() {
+        // Same rate index growth, same notional, same fixed rate — but two
+        // different elapsed windows. Fixed payment MUST scale linearly with
+        // elapsed (this is what breaks the C1 attack).
+        //
+        // Use ReceiveFixed so pnl = fixed - variable and we can isolate the
+        // fixed leg behavior. Variable leg is identical in both calls (same
+        // indices) so the delta between the two pnls is exactly the delta
+        // between the two fixed legs.
+        let pnl_1d = calculate_period_pnl(
+            SwapDirection::ReceiveFixed,
+            NOTIONAL_10K,
+            800,
+            index(1.0),
+            index(1.001),
+            ONE_DAY,
+        ).unwrap();
+
+        let pnl_2d = calculate_period_pnl(
+            SwapDirection::ReceiveFixed,
+            NOTIONAL_10K,
+            800,
+            index(1.0),
+            index(1.001),
+            2 * ONE_DAY,
+        ).unwrap();
+
+        // Doubling elapsed ⇒ fixed_payment doubles ⇒ pnl grows by one extra
+        // day's worth of fixed (~$2.19). variable is unchanged.
+        let delta = pnl_2d - pnl_1d;
+        assert!(delta >= 2_000_000 && delta <= 2_500_000,
+            "Doubling elapsed should add ~$2.19 of fixed to pnl; got {} ({}$)",
+            delta, delta as f64 / 1_000_000.0);
+    }
+
+    #[test]
+    fn one_late_settle_matches_cumulative_honest() {
+        // C1 invariant check: a single settlement with elapsed = 3*P over a
+        // rate-index move from 1.0 → 1.003 must charge the same fixed as
+        // three honest settlements of elapsed = P each over the same total
+        // move. If the bug is back, the single-late call would under-charge
+        // fixed by a factor of ~3 and the trader would pocket the delta.
+        const P: i64 = 600; // 10-minute nominal period
+
+        let pnl_late = calculate_period_pnl(
+            SwapDirection::PayFixed,
+            NOTIONAL_10K,
+            800,
+            index(1.0),
+            index(1.003),
+            3 * P,
+        ).unwrap();
+
+        // Simulate 3 honest settles at evenly-spaced rate indices.
+        let mut pnl_sum: i64 = 0;
+        let indices = [index(1.0), index(1.001), index(1.002), index(1.003)];
+        for i in 0..3 {
+            pnl_sum += calculate_period_pnl(
+                SwapDirection::PayFixed,
+                NOTIONAL_10K,
+                800,
+                indices[i],
+                indices[i + 1],
+                P,
+            ).unwrap();
+        }
+
+        // The two totals should be close. Exact equality is unrealistic
+        // because `variable = (current - last) / last` compounds between
+        // intervals — the single late call uses last=1.0 for all growth,
+        // while the three-call sequence uses increasing last values, which
+        // makes each individual variable leg slightly smaller. The fixed
+        // legs are identical (same total elapsed, same rate). Allow a
+        // small relative tolerance.
+        let diff = (pnl_late - pnl_sum).abs();
+        assert!(diff < 50_000,
+            "late-settle vs honest cumulative diverged by {} (${}) — C1 regressed?",
+            diff, diff as f64 / 1_000_000.0);
     }
 
     #[test]
