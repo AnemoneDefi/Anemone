@@ -10,20 +10,20 @@ use crate::errors::AnemoneError;
 pub fn calculate_spread_bps(
     base_spread_bps: u16,
     max_utilization_bps: u16,
-    total_lp_deposits: u64,
+    lp_nav: u64,
     total_fixed_notional: u64,
     total_variable_notional: u64,
     pending_withdrawals: u64,
 ) -> Result<u64, AnemoneError> {
-    if total_lp_deposits == 0 {
+    if lp_nav == 0 {
         return Ok(base_spread_bps as u64);
     }
 
     let base = base_spread_bps as u128;
     let max_util = max_utilization_bps as u128;
-    let deposits = total_lp_deposits as u128;
+    let deposits = lp_nav as u128;
 
-    // Utilization = (total_notional + pending_withdrawals) / total_lp_deposits
+    // Utilization = (total_notional + pending_withdrawals) / lp_nav
     let total_notional = (total_fixed_notional as u128)
         .checked_add(total_variable_notional as u128)
         .and_then(|v| v.checked_add(pending_withdrawals as u128))
@@ -43,7 +43,7 @@ pub fn calculate_spread_bps(
         .and_then(|v| v.checked_div(max_util))
         .ok_or(AnemoneError::MathOverflow)?;
 
-    // S_imbal = |N_fixed - N_variable| * 100 / total_lp_deposits
+    // S_imbal = |N_fixed - N_variable| * 100 / lp_nav
     // 100 bps (1%) at full imbalance ratio of 1.0
     let imbalance = if total_fixed_notional >= total_variable_notional {
         (total_fixed_notional - total_variable_notional) as u128

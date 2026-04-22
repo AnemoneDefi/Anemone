@@ -225,7 +225,7 @@ describe("anemone", () => {
       assert.equal(market.settlementPeriodSeconds.toNumber(), 86_400);
       assert.equal(market.maxUtilizationBps, 6000);
       assert.equal(market.baseSpreadBps, 80);
-      assert.equal(market.totalLpDeposits.toNumber(), 0);
+      assert.equal(market.lpNav.toNumber(), 0);
       assert.equal(market.totalLpShares.toNumber(), 0);
       assert.equal(market.totalOpenPositions.toNumber(), 0);
       assert.equal(market.status, 0);
@@ -640,7 +640,7 @@ describe("anemone", () => {
 
       // Verify market state
       const market = await program.account.swapMarket.fetch(marketPda);
-      assert.equal(market.totalLpDeposits.toNumber(), DEPOSIT_AMOUNT);
+      assert.equal(market.lpNav.toNumber(), DEPOSIT_AMOUNT);
       assert.equal(market.totalLpShares.toNumber(), DEPOSIT_AMOUNT);
 
       // Verify LP position
@@ -681,7 +681,7 @@ describe("anemone", () => {
 
       // Pool: 10K deposits / 10K shares. Depositing 5K → 5K shares (1:1, no yield yet)
       const market = await program.account.swapMarket.fetch(marketPda);
-      assert.equal(market.totalLpDeposits.toNumber(), DEPOSIT_AMOUNT + secondAmount);
+      assert.equal(market.lpNav.toNumber(), DEPOSIT_AMOUNT + secondAmount);
       assert.equal(market.totalLpShares.toNumber(), DEPOSIT_AMOUNT + secondAmount);
 
       const lpPos = await program.account.lpPosition.fetch(lpPositionPda);
@@ -725,7 +725,7 @@ describe("anemone", () => {
       // Verify market state
       const market = await program.account.swapMarket.fetch(marketPda);
       assert.equal(market.totalLpShares.toNumber(), totalShares - sharesToBurn);
-      assert.equal(market.totalLpDeposits.toNumber(), totalShares - sharesToBurn);
+      assert.equal(market.lpNav.toNumber(), totalShares - sharesToBurn);
 
       // Verify LP position
       const lpPos = await program.account.lpPosition.fetch(lpPositionPda);
@@ -2873,6 +2873,39 @@ describe("anemone", () => {
       console.log(
         "Staleness guard positive path verified (Open positions exist); negative path gated on Surfpool time control ✓",
       );
+    });
+
+    it("C2: sync_kamino_yield (stub) bumps last_kamino_sync_ts", async () => {
+      // Stub-oracle mode: the call doesn't touch Kamino, it only refreshes
+      // the on-chain timestamp used by MAX_NAV_STALENESS_SECS in the LP
+      // handlers. Verify the timestamp actually moves.
+      const marketBefore = await program.account.swapMarket.fetch(marketPda);
+      const tsBefore = marketBefore.lastKaminoSyncTs.toNumber();
+
+      // Sleep 1.2s so the bump is measurable even if the prior block
+      // happened in the same second.
+      await new Promise((r) => setTimeout(r, 1_200));
+
+      await program.methods
+        .syncKaminoYield()
+        .accountsStrict({ market: marketPda })
+        .rpc();
+
+      const marketAfter = await program.account.swapMarket.fetch(marketPda);
+      const tsAfter = marketAfter.lastKaminoSyncTs.toNumber();
+
+      assert.isAbove(
+        tsAfter,
+        tsBefore,
+        "sync_kamino_yield must advance last_kamino_sync_ts",
+      );
+      // Stub path does not credit yield — lp_nav should be unchanged.
+      assert.equal(
+        marketAfter.lpNav.toString(),
+        marketBefore.lpNav.toString(),
+        "stub sync must not mutate lp_nav",
+      );
+      console.log(`C2: stub sync bumped ts by ${tsAfter - tsBefore}s ✓`);
     });
   });
 });

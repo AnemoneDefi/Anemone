@@ -3,7 +3,7 @@ use anchor_spl::token_interface::{
     Mint, TokenAccount, TokenInterface,
     burn, transfer_checked, Burn, TransferChecked,
 };
-use crate::state::{SwapMarket, LpPosition, LpStatus, ProtocolState};
+use crate::state::{SwapMarket, LpPosition, LpStatus, ProtocolState, MAX_NAV_STALENESS_SECS};
 use crate::errors::AnemoneError;
 
 #[derive(Accounts)]
@@ -86,6 +86,13 @@ pub fn handle_request_withdrawal(
 ) -> Result<()> {
     require!(shares_to_burn > 0, AnemoneError::InvalidAmount);
 
+    // C2: NAV staleness gate. See deposit_liquidity for rationale.
+    let now = Clock::get()?.unix_timestamp;
+    let nav_age = now
+        .checked_sub(ctx.accounts.market.last_kamino_sync_ts)
+        .ok_or(AnemoneError::MathOverflow)?;
+    require!(nav_age < MAX_NAV_STALENESS_SECS, AnemoneError::StaleNav);
+
     let market = &ctx.accounts.market;
     let lp_position = &ctx.accounts.lp_position;
     let protocol_state = &ctx.accounts.protocol_state;
@@ -95,7 +102,7 @@ pub fn handle_request_withdrawal(
     // Share-price uses effective deposits (total - already pending) so that
     // consecutive queue-path requests stay consistent with the USDC actually
     // available to be paid out.
-    let effective_deposits = market.total_lp_deposits
+    let effective_deposits = market.lp_nav
         .checked_sub(market.pending_withdrawals)
         .ok_or(AnemoneError::MathOverflow)?;
     let gross_amount = (shares_to_burn as u128)
@@ -185,7 +192,7 @@ pub fn handle_request_withdrawal(
         }
 
         let market = &mut ctx.accounts.market;
-        market.total_lp_deposits = market.total_lp_deposits
+        market.lp_nav = market.lp_nav
             .checked_sub(gross_amount)
             .ok_or(AnemoneError::MathOverflow)?;
         market.total_lp_shares = market.total_lp_shares

@@ -14,7 +14,7 @@ pub struct SettlePeriod<'info> {
         seeds = [b"market", market.underlying_reserve.as_ref(), &market.tenor_seconds.to_le_bytes()],
         bump = market.bump,
     )]
-    pub market: Account<'info, SwapMarket>,
+    pub market: Box<Account<'info, SwapMarket>>,
 
     #[account(
         mut,
@@ -160,7 +160,28 @@ pub fn handle_settle_period(ctx: Context<SettlePeriod>) -> Result<()> {
         0
     };
 
-    // 6. Update position state using the actual transferred amount (not the raw PnL)
+    // Capture immutable reads before taking any &mut borrow on market.
+    let current_rate_index = market.current_rate_index;
+    let settlement_period_seconds = market.settlement_period_seconds;
+    let tenor_seconds = market.tenor_seconds;
+
+    // 6. Update lp_nav to mirror the USDC that physically moved between vaults.
+    //    When trader profits (actual_delta > 0), USDC left the lp_vault → lp_nav
+    //    shrinks. When trader loses, USDC came into the lp_vault → lp_nav grows.
+    //    Keeping lp_nav in sync here is what makes share price reflect
+    //    realized PnL (C2).
+    let market_mut = &mut ctx.accounts.market;
+    if actual_delta > 0 {
+        market_mut.lp_nav = market_mut.lp_nav
+            .checked_sub(actual_delta as u64)
+            .ok_or(AnemoneError::MathOverflow)?;
+    } else if actual_delta < 0 {
+        market_mut.lp_nav = market_mut.lp_nav
+            .checked_add((-actual_delta) as u64)
+            .ok_or(AnemoneError::MathOverflow)?;
+    }
+
+    // 7. Update position state using the actual transferred amount
     let position = &mut ctx.accounts.swap_position;
 
     if actual_delta > 0 {
@@ -173,7 +194,7 @@ pub fn handle_settle_period(ctx: Context<SettlePeriod>) -> Result<()> {
             .ok_or(AnemoneError::MathOverflow)?;
     }
 
-    position.last_settled_rate_index = market.current_rate_index;
+    position.last_settled_rate_index = current_rate_index;
     // realized_pnl tracks what was actually paid/received, not the theoretical PnL
     position.realized_pnl = position.realized_pnl
         .checked_add(actual_delta)
@@ -183,7 +204,7 @@ pub fn handle_settle_period(ctx: Context<SettlePeriod>) -> Result<()> {
         .ok_or(AnemoneError::MathOverflow)?;
     position.last_settlement_ts = now;
     position.next_settlement_ts = now
-        .checked_add(market.settlement_period_seconds)
+        .checked_add(settlement_period_seconds)
         .ok_or(AnemoneError::MathOverflow)?;
 
     // 7. Check maturity
@@ -193,7 +214,7 @@ pub fn handle_settle_period(ctx: Context<SettlePeriod>) -> Result<()> {
     }
 
     // 8. Check maintenance margin (warning only — liquidation in Day 13-14)
-    let maintenance = calculate_maintenance_margin(position.notional, market.tenor_seconds)?;
+    let maintenance = calculate_maintenance_margin(position.notional, tenor_seconds)?;
     if position.collateral_remaining < maintenance && position.status == PositionStatus::Open {
         msg!(
             "WARNING: Below maintenance margin! remaining={} < maintenance={}",
