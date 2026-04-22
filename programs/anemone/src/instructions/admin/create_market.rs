@@ -1,6 +1,24 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface};
 use crate::state::{ProtocolState, SwapMarket};
+use crate::errors::AnemoneError;
+
+// H5 market param caps. See also `initialize_protocol` for the fee caps.
+//
+//   max_utilization_bps  <= 9500 (95%) — leaves a 5% buffer so LP can
+//                                        always exit even at peak usage
+//   base_spread_bps      <=  500 (5%)  — any real rate-swap market has
+//                                        base spread < 1% (Pendle 0.2%,
+//                                        IPOR 0.3%). 500 bps is 10x that
+//                                        so admin mistakes are caught
+//                                        without flagging exotic designs.
+//   tenor_seconds        >=    1       — reject zero/negative; longer
+//                                        minimums are market policy, not
+//                                        safety. Real markets use 1d+.
+//   settlement_period    <=  tenor     — correctness: one settlement
+//                                        per tenor at minimum.
+pub const MAX_UTILIZATION_BPS_CAP: u16 = 9_500;
+pub const MAX_BASE_SPREAD_BPS: u16 = 500;
 
 #[derive(Accounts)]
 #[instruction(tenor_seconds: i64)]
@@ -96,6 +114,21 @@ pub fn handle_create_market(
     base_spread_bps: u16,
     max_leverage: u8,
 ) -> Result<()> {
+    require!(tenor_seconds > 0, AnemoneError::ParamOutOfRange);
+    require!(
+        settlement_period_seconds > 0 && settlement_period_seconds <= tenor_seconds,
+        AnemoneError::ParamOutOfRange,
+    );
+    require!(
+        max_utilization_bps > 0 && max_utilization_bps <= MAX_UTILIZATION_BPS_CAP,
+        AnemoneError::ParamOutOfRange,
+    );
+    require!(base_spread_bps <= MAX_BASE_SPREAD_BPS, AnemoneError::ParamOutOfRange);
+    // `max_leverage` is not capped here — the field is dead code in v1
+    // (`position.leverage = 1` is hardcoded in open_swap). It will be
+    // removed in the leverage cleanup pass; adding a cap now would just
+    // have to come back out.
+
     let market = &mut ctx.accounts.market;
     let protocol_state = &mut ctx.accounts.protocol_state;
 

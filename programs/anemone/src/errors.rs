@@ -48,4 +48,6 @@ pub enum AnemoneError {
     InsufficientVaultLiquidity,
     #[msg("Rate index growth between settlements exceeds the circuit-breaker cap")]
     RateMoveTooLarge,
+    #[msg("Parameter exceeds its protocol-level safety cap")]
+    ParamOutOfRange,
 }
