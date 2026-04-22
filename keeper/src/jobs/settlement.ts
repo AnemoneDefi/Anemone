@@ -3,6 +3,7 @@ import bs58 from "bs58";
 import { KeeperClient } from "../client";
 import { KeeperConfig } from "../config";
 import { deriveLpVaultPda, deriveCollateralVaultPda } from "../utils/pda";
+import { priorityFeeInstructions } from "../utils/priorityFee";
 import { logger } from "../utils/logger";
 
 // Offset of the `status` field in the SwapPosition account, measured from
@@ -79,6 +80,7 @@ async function settleOne(
         caller: client.keeperWallet.publicKey,
         tokenProgram: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
       })
+      .preInstructions(priorityFeeInstructions(config.priorityFeeMicrolamports))
       .rpc();
 
     logger.info(

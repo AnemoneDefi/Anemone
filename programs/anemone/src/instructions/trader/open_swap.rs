@@ -7,6 +7,18 @@ use crate::state::{SwapMarket, SwapPosition, SwapDirection, PositionStatus, Prot
 use crate::helpers::{calculate_spread_bps, calculate_initial_margin, calculate_current_apy_from_index};
 use crate::errors::AnemoneError;
 
+/// Maximum age of `market.last_rate_update_ts` that `open_swap` will price
+/// a swap against. A stale rate index means the quote is still being offered
+/// against yesterday's APY — an obvious MEV/arbitrage lane, especially right
+/// after a lending rate spike (e.g. April 2026 Kamino contagion: 4%→12% in
+/// hours). If this trips, the keeper missed too many `update_rate_index`
+/// ticks — fix the keeper, don't weaken the guard.
+///
+/// Set to 10 min so we tolerate 2–3 missed keeper ticks (keeper cadence is
+/// every 3 min per the README). Raising this weakens the MEV protection;
+/// lowering it risks DoSing `open_swap` when Solana fee markets are hot.
+pub const MAX_QUOTE_STALENESS_SECS: i64 = 600;
+
 #[derive(Accounts)]
 #[instruction(direction: SwapDirection, notional: u64, nonce: u8, max_rate_bps: u64, min_rate_bps: u64)]
 pub struct OpenSwap<'info> {
@@ -88,6 +100,13 @@ pub fn handle_open_swap(
         market.current_rate_index > 0 && market.previous_rate_index > 0,
         AnemoneError::RateIndexNotInitialized
     );
+
+    // 1b. Reject stale quotes. See MAX_QUOTE_STALENESS_SECS doc for rationale.
+    let now = Clock::get()?.unix_timestamp;
+    let rate_age = now
+        .checked_sub(market.last_rate_update_ts)
+        .ok_or(AnemoneError::MathOverflow)?;
+    require!(rate_age < MAX_QUOTE_STALENESS_SECS, AnemoneError::StaleOracle);
 
     // 2. Calculate current APY from the two rate index snapshots
     let elapsed = market.last_rate_update_ts
@@ -219,8 +238,7 @@ pub fn handle_open_swap(
         ctx.accounts.underlying_mint.decimals,
     )?;
 
-    // 11. Initialize SwapPosition
-    let now = Clock::get()?.unix_timestamp;
+    // 11. Initialize SwapPosition (reuse `now` captured at staleness check)
     let position = &mut ctx.accounts.swap_position;
     position.owner = ctx.accounts.trader.key();
     position.market = ctx.accounts.market.key();

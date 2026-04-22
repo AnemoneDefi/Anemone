@@ -13,6 +13,16 @@ export interface KeeperConfig {
   stubRateIncrement: bigint;
   keeperKeypair: Keypair;
   adminKeypair: Keypair | null;
+  /**
+   * Priority fee paid per compute unit. Non-zero values buy prioritization
+   * during hot fee markets; critical for `update_rate_index` to land before
+   * the on-chain MAX_QUOTE_STALENESS_SECS (see open_swap.rs). Without this,
+   * the staleness guard can DoS the protocol when the fee market is busy.
+   *
+   * Default: 10_000 microlamports (~0.0002 SOL for a 200k CU tx). Tune per
+   * cluster load via env var PRIORITY_FEE_MICROLAMPORTS.
+   */
+  priorityFeeMicrolamports: number;
 }
 
 function loadKeypair(path: string): Keypair {
@@ -35,6 +45,10 @@ export function loadConfig(): KeeperConfig {
   const stubRateIncrement = BigInt(
     process.env.STUB_RATE_INCREMENT || "1000000000000",
   );
+  const priorityFeeMicrolamports = parseInt(
+    process.env.PRIORITY_FEE_MICROLAMPORTS || "10000",
+    10,
+  );
 
   const keeperKeypair = loadKeypair(required("KEYPAIR_PATH"));
 
@@ -52,5 +66,6 @@ export function loadConfig(): KeeperConfig {
     stubRateIncrement,
     keeperKeypair,
     adminKeypair,
+    priorityFeeMicrolamports,
   };
 }
