@@ -17,6 +17,11 @@ pub struct ProtocolState {
     /// 5% on collateral returned when trader closes early (500 = 5%)
     pub early_close_fee_bps: u16,
     pub bump: u8,
+    /// Global kill switch. When true, `open_swap` and `deposit_liquidity`
+    /// reject — no new capital enters the system. Settlement, liquidation,
+    /// Kamino sync, early close, claim, and LP withdrawals stay live so
+    /// admin cannot freeze user funds in-flight.
+    pub paused: bool,
 }
 
 impl ProtocolState {
@@ -30,5 +35,6 @@ impl ProtocolState {
         + 2   // liquidation_fee_bps
         + 2   // withdrawal_fee_bps
         + 2   // early_close_fee_bps
-        + 1;  // bump
+        + 1   // bump
+        + 1;  // paused
 }

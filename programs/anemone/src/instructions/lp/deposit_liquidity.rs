@@ -3,11 +3,17 @@ use anchor_spl::token_interface::{
     Mint, TokenAccount, TokenInterface,
     mint_to, transfer_checked, MintTo, TransferChecked,
 };
-use crate::state::{SwapMarket, LpPosition, LpStatus, MAX_NAV_STALENESS_SECS};
+use crate::state::{SwapMarket, LpPosition, LpStatus, ProtocolState, MAX_NAV_STALENESS_SECS};
 use crate::errors::AnemoneError;
 
 #[derive(Accounts)]
 pub struct DepositLiquidity<'info> {
+    #[account(
+        seeds = [b"protocol"],
+        bump = protocol_state.bump,
+    )]
+    pub protocol_state: Account<'info, ProtocolState>,
+
     #[account(
         mut,
         seeds = [b"market", market.underlying_reserve.as_ref(), &market.tenor_seconds.to_le_bytes()],
@@ -73,6 +79,8 @@ pub fn handle_deposit_liquidity(
     amount: u64,
 ) -> Result<()> {
     require!(amount > 0, AnemoneError::InvalidAmount);
+
+    require!(!ctx.accounts.protocol_state.paused, AnemoneError::ProtocolPaused);
 
     // C2: require a recent NAV sync. Share pricing depends on lp_nav being
     // close to the real redeemable value (lp_vault + Kamino yield). If the

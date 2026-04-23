@@ -56,4 +56,6 @@ pub enum AnemoneError {
     StaleNav,
     #[msg("Position has unpaid PnL owed by the LP vault — wait for keeper to refill and settle again")]
     UnpaidPnlOutstanding,
+    #[msg("Protocol is paused — admin has blocked new swaps and LP deposits")]
+    ProtocolPaused,
 }

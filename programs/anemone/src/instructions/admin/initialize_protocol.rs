@@ -67,6 +67,7 @@ pub fn handle_initialize_protocol(
     protocol_state.withdrawal_fee_bps = withdrawal_fee_bps;
     protocol_state.early_close_fee_bps = early_close_fee_bps;
     protocol_state.bump = ctx.bumps.protocol_state;
+    protocol_state.paused = false;
 
     msg!("Protocol initialized with fees: opening={}bps, perf={}bps, liq={}bps, withdraw={}bps, early_close={}bps",
         opening_fee_bps, protocol_fee_bps, liquidation_fee_bps, withdrawal_fee_bps, early_close_fee_bps);

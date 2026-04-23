@@ -623,6 +623,7 @@ describe("anemone", () => {
       const tx = await program.methods
         .depositLiquidity(new anchor.BN(DEPOSIT_AMOUNT))
         .accountsStrict({
+          protocolState: protocolStatePda,
           market: marketPda,
           lpPosition: lpPositionPda,
           lpVault: lpVaultPda,
@@ -666,6 +667,7 @@ describe("anemone", () => {
       await program.methods
         .depositLiquidity(new anchor.BN(secondAmount))
         .accountsStrict({
+          protocolState: protocolStatePda,
           market: marketPda,
           lpPosition: lpPositionPda,
           lpVault: lpVaultPda,
@@ -933,6 +935,7 @@ describe("anemone", () => {
       await program.methods
         .depositLiquidity(new anchor.BN(LP_DEPOSIT))
         .accountsStrict({
+          protocolState: protocolStatePda,
           market: swapMarketPda,
           lpPosition: swapLpPositionPda,
           lpVault: swapLpVaultPda,
@@ -1667,6 +1670,7 @@ describe("anemone", () => {
       await program.methods
         .depositLiquidity(new anchor.BN(LP_DEPOSIT))
         .accountsStrict({
+          protocolState: protocolStatePda,
           market: shortMarketPda,
           lpPosition: shortLpPositionPda,
           lpVault: shortLpVaultPda,
@@ -1943,6 +1947,7 @@ describe("anemone", () => {
       await program.methods
         .depositLiquidity(new anchor.BN(LP_DEPOSIT))
         .accountsStrict({
+          protocolState: protocolStatePda,
           market: liqMarketPda,
           lpPosition: liqLpPositionPda,
           lpVault: liqLpVaultPda,
@@ -2451,6 +2456,7 @@ describe("anemone", () => {
       await program.methods
         .depositLiquidity(new anchor.BN(LP_DEPOSIT))
         .accountsStrict({
+          protocolState: protocolStatePda,
           market: earlyMarketPda,
           lpPosition: earlyLpPositionPda,
           lpVault: earlyLpVaultPda,
@@ -2910,6 +2916,164 @@ describe("anemone", () => {
         "stub sync must not mutate lp_nav",
       );
       console.log(`C2: stub sync bumped ts by ${tsAfter - tsBefore}s ✓`);
+    });
+  });
+
+  describe("pause_protocol / unpause_protocol (Fase 5 Parte 1)", () => {
+    const pauseDepositor = Keypair.generate();
+    let pauseDepositorTokenAccount: PublicKey;
+    let pauseDepositorLpTokenAccount: PublicKey;
+    let pauseLpPositionPda: PublicKey;
+
+    before(async () => {
+      // Fund the fresh depositor so it can pay for its own token-account rent
+      const airdropSig = await provider.connection.requestAirdrop(
+        pauseDepositor.publicKey,
+        1 * anchor.web3.LAMPORTS_PER_SOL,
+      );
+      await provider.connection.confirmTransaction(airdropSig, "confirmed");
+
+      [pauseLpPositionPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("lp"), pauseDepositor.publicKey.toBuffer(), marketPda.toBuffer()],
+        program.programId,
+      );
+
+      pauseDepositorTokenAccount = await createAccount(
+        provider.connection,
+        pauseDepositor,
+        underlyingMint.publicKey,
+        pauseDepositor.publicKey,
+      );
+      await mintTo(
+        provider.connection,
+        (authority as any).payer,
+        underlyingMint.publicKey,
+        pauseDepositorTokenAccount,
+        authority.publicKey,
+        10_000,
+      );
+      pauseDepositorLpTokenAccount = await createAccount(
+        provider.connection,
+        pauseDepositor,
+        lpMintPda,
+        pauseDepositor.publicKey,
+      );
+    });
+
+    it("rejects pause from a non-admin signer", async () => {
+      const attacker = anchor.web3.Keypair.generate();
+      // Fund the attacker so the tx doesn't fail for lacking rent
+      const airdropSig = await provider.connection.requestAirdrop(
+        attacker.publicKey,
+        1 * anchor.web3.LAMPORTS_PER_SOL,
+      );
+      await provider.connection.confirmTransaction(airdropSig, "confirmed");
+
+      try {
+        await program.methods
+          .pauseProtocol()
+          .accountsStrict({
+            protocolState: protocolStatePda,
+            authority: attacker.publicKey,
+          })
+          .signers([attacker])
+          .rpc();
+        assert.fail("pause should have been rejected (non-admin)");
+      } catch (err: any) {
+        assert.include(err.toString(), "InvalidAuthority");
+      }
+
+      const ps = await program.account.protocolState.fetch(protocolStatePda);
+      assert.isFalse(ps.paused, "state must stay unpaused after failed attempt");
+    });
+
+    it("pause blocks deposit_liquidity, unpause restores it", async () => {
+      // Sanity: protocol starts unpaused
+      let ps = await program.account.protocolState.fetch(protocolStatePda);
+      assert.isFalse(ps.paused);
+
+      // Admin pauses
+      await program.methods
+        .pauseProtocol()
+        .accountsStrict({
+          protocolState: protocolStatePda,
+          authority: authority.publicKey,
+        })
+        .rpc();
+
+      ps = await program.account.protocolState.fetch(protocolStatePda);
+      assert.isTrue(ps.paused, "protocol should be paused");
+
+      // Deposit while paused → ProtocolPaused
+      try {
+        await program.methods
+          .depositLiquidity(new anchor.BN(100))
+          .accountsStrict({
+            protocolState: protocolStatePda,
+            market: marketPda,
+            lpPosition: pauseLpPositionPda,
+            lpVault: lpVaultPda,
+            lpMint: lpMintPda,
+            underlyingMint: underlyingMint.publicKey,
+            depositorTokenAccount: pauseDepositorTokenAccount,
+            depositorLpTokenAccount: pauseDepositorLpTokenAccount,
+            depositor: pauseDepositor.publicKey,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([pauseDepositor])
+          .rpc();
+        assert.fail("deposit should have been rejected while paused");
+      } catch (err: any) {
+        assert.include(err.toString(), "ProtocolPaused");
+      }
+
+      // Admin unpauses
+      await program.methods
+        .unpauseProtocol()
+        .accountsStrict({
+          protocolState: protocolStatePda,
+          authority: authority.publicKey,
+        })
+        .rpc();
+
+      ps = await program.account.protocolState.fetch(protocolStatePda);
+      assert.isFalse(ps.paused, "protocol should be unpaused");
+    });
+
+    it("pause does NOT block sync_kamino_yield (keeper op stays live)", async () => {
+      // Pause first
+      await program.methods
+        .pauseProtocol()
+        .accountsStrict({
+          protocolState: protocolStatePda,
+          authority: authority.publicKey,
+        })
+        .rpc();
+
+      // Critical keeper op must still work during pause —
+      // otherwise admin could freeze settlement by pausing.
+      const marketBefore = await program.account.swapMarket.fetch(marketPda);
+      await new Promise((r) => setTimeout(r, 1_200));
+      await program.methods
+        .syncKaminoYield()
+        .accountsStrict({ market: marketPda })
+        .rpc();
+      const marketAfter = await program.account.swapMarket.fetch(marketPda);
+      assert.isAbove(
+        marketAfter.lastKaminoSyncTs.toNumber(),
+        marketBefore.lastKaminoSyncTs.toNumber(),
+        "sync_kamino_yield must advance last_kamino_sync_ts even while paused",
+      );
+
+      // Clean up
+      await program.methods
+        .unpauseProtocol()
+        .accountsStrict({
+          protocolState: protocolStatePda,
+          authority: authority.publicKey,
+        })
+        .rpc();
     });
   });
 });
