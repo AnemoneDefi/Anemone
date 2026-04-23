@@ -6,7 +6,7 @@ import {
 } from "@solana/spl-token";
 import { KeeperClient } from "../client";
 import { KeeperConfig } from "../config";
-import { deriveProtocolPda, deriveCollateralVaultPda } from "../utils/pda";
+import { deriveProtocolPda, deriveCollateralVaultPda, deriveLpVaultPda } from "../utils/pda";
 import { calculateMaintenanceMargin } from "../utils/margin";
 import { priorityFeeInstructions } from "../utils/priorityFee";
 import { logger } from "../utils/logger";
@@ -97,6 +97,7 @@ async function tryLiquidate(
         protocolState: deriveProtocolPda(config.programId),
         market: account.market,
         swapPosition: position,
+        lpVault: deriveLpVaultPda(account.market, config.programId),
         collateralVault: deriveCollateralVaultPda(account.market, config.programId),
         owner: account.owner,
         ownerTokenAccount: ownerAta,

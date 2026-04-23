@@ -73,14 +73,27 @@ pub fn handle_settle_period(ctx: Context<SettlePeriod>) -> Result<()> {
         AnemoneError::InvalidRateIndex
     );
 
-    // 4. Calculate PnL for this period
+    // 4. Calculate PnL using the REAL elapsed time since the last settlement,
+    //    not `market.settlement_period_seconds`. Passing the nominal period
+    //    to `calculate_period_pnl` was the C1 bug: a PayFixed trader could
+    //    skip the permissionless settle_period calls for hours/days, then
+    //    trigger one call. `variable_payment` naturally reflects the full
+    //    elapsed growth (rate_index is monotonic and time-embedded), while
+    //    `fixed_payment` only charged the nominal period — the difference
+    //    came out of the LP vault. Using `elapsed` keeps both legs
+    //    symmetric regardless of call timing.
+    let elapsed = now
+        .checked_sub(position.last_settlement_ts)
+        .ok_or(AnemoneError::MathOverflow)?;
+    require!(elapsed > 0, AnemoneError::InvalidElapsedTime);
+
     let pnl = calculate_period_pnl(
         position.direction,
         position.notional,
         position.fixed_rate_bps,
         position.last_settled_rate_index,
         market.current_rate_index,
-        market.settlement_period_seconds,
+        elapsed,
     )?;
 
     // 5. Transfer tokens between vaults based on PnL
