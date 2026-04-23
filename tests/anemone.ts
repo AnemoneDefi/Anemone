@@ -1396,6 +1396,7 @@ describe("anemone", () => {
     // Reuse the Kamino market + position opened in open_swap tests (nonce=0)
     const KAMINO_TENOR = new anchor.BN(604_800);
     let claimMarketPda: PublicKey;
+    let claimLpVaultPda: PublicKey;
     let claimCollateralVaultPda: PublicKey;
     let claimSwapPositionPda: PublicKey;
 
@@ -1406,6 +1407,11 @@ describe("anemone", () => {
           KAMINO_USDC_RESERVE.toBuffer(),
           KAMINO_TENOR.toArrayLike(Buffer, "le", 8),
         ],
+        program.programId
+      );
+
+      [claimLpVaultPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("lp_vault"), claimMarketPda.toBuffer()],
         program.programId
       );
 
@@ -1535,6 +1541,7 @@ describe("anemone", () => {
             protocolState: protocolStatePda,
             market: claimMarketPda,
             swapPosition: claimSwapPositionPda,
+            lpVault: claimLpVaultPda,
             collateralVault: claimCollateralVaultPda,
             owner: authority.publicKey,
             ownerTokenAccount: ownerTokenAccount,
@@ -2088,6 +2095,7 @@ describe("anemone", () => {
             protocolState: protocolStatePda,
             market: liqMarketPda,
             swapPosition: liqSwapPosPda,
+            lpVault: liqLpVaultPda,
             collateralVault: liqCollateralVaultPda,
             owner: authority.publicKey,
             ownerTokenAccount: liqOwnerReceiptToken,
