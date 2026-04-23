@@ -51,6 +51,14 @@ pub mod anemone {
         instructions::admin::set_keeper::handle_set_keeper(ctx, new_keeper)
     }
 
+    pub fn pause_protocol(ctx: Context<PauseProtocol>) -> Result<()> {
+        instructions::admin::pause_protocol::handle_pause_protocol(ctx)
+    }
+
+    pub fn unpause_protocol(ctx: Context<PauseProtocol>) -> Result<()> {
+        instructions::admin::pause_protocol::handle_unpause_protocol(ctx)
+    }
+
     /// Admin-only stub for clusters where Kamino K-Lend is not deployed
     /// (localnet/devnet). Feature-gated so mainnet builds do NOT include it —
     /// see [features] in programs/anemone/Cargo.toml. On mainnet, rate index

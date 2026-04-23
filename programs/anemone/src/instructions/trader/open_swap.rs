@@ -95,6 +95,8 @@ pub fn handle_open_swap(
     let market = &ctx.accounts.market;
     let protocol_state = &ctx.accounts.protocol_state;
 
+    require!(!protocol_state.paused, AnemoneError::ProtocolPaused);
+
     // 1. Validate rate index has been initialized by keeper
     require!(
         market.current_rate_index > 0 && market.previous_rate_index > 0,
