@@ -37,7 +37,6 @@ pub mod anemone {
         settlement_period_seconds: i64,
         max_utilization_bps: u16,
         base_spread_bps: u16,
-        max_leverage: u8,
     ) -> Result<()> {
         instructions::admin::create_market::handle_create_market(
             ctx,
@@ -45,7 +44,6 @@ pub mod anemone {
             settlement_period_seconds,
             max_utilization_bps,
             base_spread_bps,
-            max_leverage,
         )
     }
 
@@ -53,6 +51,11 @@ pub mod anemone {
         instructions::admin::set_keeper::handle_set_keeper(ctx, new_keeper)
     }
 
+    /// Admin-only stub for clusters where Kamino K-Lend is not deployed
+    /// (localnet/devnet). Feature-gated so mainnet builds do NOT include it —
+    /// see [features] in programs/anemone/Cargo.toml. On mainnet, rate index
+    /// comes exclusively from `update_rate_index` reading Kamino state.
+    #[cfg(feature = "stub-oracle")]
     pub fn set_rate_index_oracle(
         ctx: Context<SetRateIndexOracle>,
         rate_index: u128,
@@ -70,6 +73,10 @@ pub mod anemone {
 
     pub fn request_withdrawal(ctx: Context<RequestWithdrawal>, shares_to_burn: u64) -> Result<()> {
         instructions::lp::request_withdrawal::handle_request_withdrawal(ctx, shares_to_burn)
+    }
+
+    pub fn claim_withdrawal(ctx: Context<ClaimWithdrawal>) -> Result<()> {
+        instructions::lp::claim_withdrawal::handle_claim_withdrawal(ctx)
     }
 
     pub fn deposit_to_kamino(ctx: Context<DepositToKamino>, amount: u64) -> Result<()> {

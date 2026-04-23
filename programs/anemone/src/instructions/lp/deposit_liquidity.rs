@@ -78,13 +78,18 @@ pub fn handle_deposit_liquidity(
     let lp_position = &mut ctx.accounts.lp_position;
 
     // Step 1: Calculate shares
-    // First depositor gets 1:1, subsequent get proportional to pool value
+    // First depositor gets 1:1, subsequent get proportional to pool value.
+    // Effective deposits exclude pending withdrawals so that a new LP does
+    // not get a discounted share price while another LP is mid-exit.
     let shares = if market.total_lp_shares == 0 {
         amount
     } else {
+        let effective_deposits = market.total_lp_deposits
+            .checked_sub(market.pending_withdrawals)
+            .ok_or(AnemoneError::MathOverflow)?;
         (amount as u128)
             .checked_mul(market.total_lp_shares as u128)
-            .and_then(|v| v.checked_div(market.total_lp_deposits as u128))
+            .and_then(|v| v.checked_div(effective_deposits as u128))
             .ok_or(AnemoneError::MathOverflow)? as u64
     };
 

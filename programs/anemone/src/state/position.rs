@@ -23,7 +23,6 @@ pub struct SwapPosition {
     pub direction: SwapDirection,
     pub notional: u64,
     pub fixed_rate_bps: u64,
-    pub leverage: u8,
 
     // Collateral
     pub collateral_deposited: u64,
@@ -55,7 +54,6 @@ impl SwapPosition {
         + 1    // direction (enum)
         + 8    // notional
         + 8    // fixed_rate_bps
-        + 1    // leverage
         + 8    // collateral_deposited
         + 8    // collateral_remaining
         + 16   // entry_rate_index

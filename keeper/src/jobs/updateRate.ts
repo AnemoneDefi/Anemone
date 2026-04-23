@@ -3,6 +3,7 @@ import { PublicKey } from "@solana/web3.js";
 import { KeeperConfig } from "../config";
 import { KeeperClient, adminProgram } from "../client";
 import { deriveProtocolPda } from "../utils/pda";
+import { priorityFeeInstructions } from "../utils/priorityFee";
 import { logger } from "../utils/logger";
 
 /**
@@ -58,6 +59,7 @@ async function runStubOracle(
       market: config.marketPda,
       authority: client.adminWallet.publicKey,
     })
+    .preInstructions(priorityFeeInstructions(config.priorityFeeMicrolamports))
     .rpc();
 
   logger.info(
@@ -76,6 +78,7 @@ async function runKaminoRate(
       market: config.marketPda,
       kaminoReserve: config.kaminoReserve,
     })
+    .preInstructions(priorityFeeInstructions(config.priorityFeeMicrolamports))
     .rpc();
 
   logger.info({ sig }, "update_rate_index: pushed from Kamino");

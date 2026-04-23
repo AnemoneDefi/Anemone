@@ -1,6 +1,24 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface};
 use crate::state::{ProtocolState, SwapMarket};
+use crate::errors::AnemoneError;
+
+// H5 market param caps. See also `initialize_protocol` for the fee caps.
+//
+//   max_utilization_bps  <= 9500 (95%) — leaves a 5% buffer so LP can
+//                                        always exit even at peak usage
+//   base_spread_bps      <=  500 (5%)  — any real rate-swap market has
+//                                        base spread < 1% (Pendle 0.2%,
+//                                        IPOR 0.3%). 500 bps is 10x that
+//                                        so admin mistakes are caught
+//                                        without flagging exotic designs.
+//   tenor_seconds        >=    1       — reject zero/negative; longer
+//                                        minimums are market policy, not
+//                                        safety. Real markets use 1d+.
+//   settlement_period    <=  tenor     — correctness: one settlement
+//                                        per tenor at minimum.
+pub const MAX_UTILIZATION_BPS_CAP: u16 = 9_500;
+pub const MAX_BASE_SPREAD_BPS: u16 = 500;
 
 #[derive(Accounts)]
 #[instruction(tenor_seconds: i64)]
@@ -94,8 +112,32 @@ pub fn handle_create_market(
     settlement_period_seconds: i64,
     max_utilization_bps: u16,
     base_spread_bps: u16,
-    max_leverage: u8,
 ) -> Result<()> {
+    require!(tenor_seconds > 0, AnemoneError::ParamOutOfRange);
+    require!(
+        settlement_period_seconds > 0 && settlement_period_seconds <= tenor_seconds,
+        AnemoneError::ParamOutOfRange,
+    );
+    require!(
+        max_utilization_bps > 0 && max_utilization_bps <= MAX_UTILIZATION_BPS_CAP,
+        AnemoneError::ParamOutOfRange,
+    );
+    require!(base_spread_bps <= MAX_BASE_SPREAD_BPS, AnemoneError::ParamOutOfRange);
+
+    // H7: restrict the underlying to classic SPL Token mints. Token-2022
+    // extensions (TransferHook, PermanentDelegate, TransferFee, DefaultAccountState
+    // = Frozen, NonTransferable, …) break invariants the protocol relies on —
+    // a malicious TransferHook could re-enter `claim_withdrawal` mid-transfer;
+    // PermanentDelegate lets an external pubkey drain `lp_vault` without the
+    // market PDA ever signing; TransferFee silently desyncs `total_lp_deposits`
+    // from `lp_vault.amount`. USDC on Solana is still classic SPL, so this
+    // constraint does not block the intended use case. Lift to a per-extension
+    // allowlist only when we actually want to onboard a Token-2022 mint.
+    require!(
+        ctx.accounts.underlying_mint.to_account_info().owner == &anchor_spl::token::ID,
+        AnemoneError::UnsupportedMintExtensions,
+    );
+
     let market = &mut ctx.accounts.market;
     let protocol_state = &mut ctx.accounts.protocol_state;
 
@@ -116,7 +158,6 @@ pub fn handle_create_market(
     market.settlement_period_seconds = settlement_period_seconds;
     market.max_utilization_bps = max_utilization_bps;
     market.base_spread_bps = base_spread_bps;
-    market.max_leverage = max_leverage;
 
     // State (all zeros on creation)
     market.total_lp_deposits = 0;
@@ -139,8 +180,8 @@ pub fn handle_create_market(
     // Increment market counter
     protocol_state.total_markets += 1;
 
-    msg!("Market created: tenor={}s, spread={}bps, max_util={}bps, max_lev={}x",
-        tenor_seconds, base_spread_bps, max_utilization_bps, max_leverage);
+    msg!("Market created: tenor={}s, spread={}bps, max_util={}bps",
+        tenor_seconds, base_spread_bps, max_utilization_bps);
 
     Ok(())
 }
