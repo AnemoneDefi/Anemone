@@ -67,6 +67,10 @@ pub mod anemone {
         instructions::keeper::update_rate_index::handle_update_rate_index(ctx)
     }
 
+    pub fn sync_kamino_yield(ctx: Context<SyncKaminoYield>) -> Result<()> {
+        instructions::keeper::sync_kamino_yield::handle_sync_kamino_yield(ctx)
+    }
+
     pub fn deposit_liquidity(ctx: Context<DepositLiquidity>, amount: u64) -> Result<()> {
         instructions::lp::deposit_liquidity::handle_deposit_liquidity(ctx, amount)
     }

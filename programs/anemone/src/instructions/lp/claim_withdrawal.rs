@@ -3,7 +3,7 @@ use anchor_spl::token_interface::{
     Mint, TokenAccount, TokenInterface,
     transfer_checked, TransferChecked,
 };
-use crate::state::{SwapMarket, LpPosition, LpStatus, ProtocolState};
+use crate::state::{SwapMarket, LpPosition, LpStatus, ProtocolState, MAX_NAV_STALENESS_SECS};
 use crate::errors::AnemoneError;
 
 #[derive(Accounts)]
@@ -62,6 +62,16 @@ pub struct ClaimWithdrawal<'info> {
 }
 
 pub fn handle_claim_withdrawal(ctx: Context<ClaimWithdrawal>) -> Result<()> {
+    // C2: NAV staleness gate. gross_amount was locked at request time so the
+    // payout is already fixed, but pending_withdrawals reservation still
+    // tracks lp_nav — keeping the gate consistent across all LP handlers
+    // avoids surprises and exercises the same bundle-sync pattern.
+    let now = Clock::get()?.unix_timestamp;
+    let nav_age = now
+        .checked_sub(ctx.accounts.market.last_kamino_sync_ts)
+        .ok_or(AnemoneError::MathOverflow)?;
+    require!(nav_age < MAX_NAV_STALENESS_SECS, AnemoneError::StaleNav);
+
     let gross_amount = ctx.accounts.lp_position.withdrawal_amount;
     require!(gross_amount > 0, AnemoneError::NoPendingWithdrawal);
 
@@ -123,7 +133,7 @@ pub fn handle_claim_withdrawal(ctx: Context<ClaimWithdrawal>) -> Result<()> {
     }
 
     let market = &mut ctx.accounts.market;
-    market.total_lp_deposits = market.total_lp_deposits
+    market.lp_nav = market.lp_nav
         .checked_sub(gross_amount)
         .ok_or(AnemoneError::MathOverflow)?;
     market.pending_withdrawals = market.pending_withdrawals

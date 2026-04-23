@@ -35,7 +35,7 @@ pub struct OpenSwap<'info> {
         bump = market.bump,
         constraint = market.status == 0 @ AnemoneError::MarketPaused,
     )]
-    pub market: Account<'info, SwapMarket>,
+    pub market: Box<Account<'info, SwapMarket>>,
 
     #[account(
         init,
@@ -142,7 +142,7 @@ pub fn handle_open_swap(
     let spread_bps = calculate_spread_bps(
         market.base_spread_bps,
         market.max_utilization_bps,
-        market.total_lp_deposits,
+        market.lp_nav,
         fixed_with_new,
         variable_with_new,
         market.pending_withdrawals,
@@ -191,7 +191,7 @@ pub fn handle_open_swap(
 
     let utilization_bps = new_total_notional
         .checked_mul(10_000)
-        .and_then(|v| v.checked_div(market.total_lp_deposits as u128))
+        .and_then(|v| v.checked_div(market.lp_nav as u128))
         .ok_or(AnemoneError::MathOverflow)?;
 
     require!(
