@@ -21,7 +21,7 @@ pub struct ClosePositionEarly<'info> {
         seeds = [b"market", market.underlying_reserve.as_ref(), &market.tenor_seconds.to_le_bytes()],
         bump = market.bump,
     )]
-    pub market: Account<'info, SwapMarket>,
+    pub market: Box<Account<'info, SwapMarket>>,
 
     #[account(
         mut,
@@ -219,8 +219,17 @@ pub fn handle_close_position_early(ctx: Context<ClosePositionEarly>) -> Result<(
         )?;
     }
 
-    // 7. Update market totals
+    // 7. Update market totals + lp_nav to mirror the MtM transfer (C2).
     let market = &mut ctx.accounts.market;
+    if actual_delta > 0 {
+        market.lp_nav = market.lp_nav
+            .checked_sub(actual_delta as u64)
+            .ok_or(AnemoneError::MathOverflow)?;
+    } else if actual_delta < 0 {
+        market.lp_nav = market.lp_nav
+            .checked_add((-actual_delta) as u64)
+            .ok_or(AnemoneError::MathOverflow)?;
+    }
     match direction {
         SwapDirection::PayFixed => {
             market.total_fixed_notional = market.total_fixed_notional

@@ -3,7 +3,7 @@ use anchor_spl::token_interface::{
     Mint, TokenAccount, TokenInterface,
     mint_to, transfer_checked, MintTo, TransferChecked,
 };
-use crate::state::{SwapMarket, LpPosition, LpStatus};
+use crate::state::{SwapMarket, LpPosition, LpStatus, MAX_NAV_STALENESS_SECS};
 use crate::errors::AnemoneError;
 
 #[derive(Accounts)]
@@ -74,6 +74,16 @@ pub fn handle_deposit_liquidity(
 ) -> Result<()> {
     require!(amount > 0, AnemoneError::InvalidAmount);
 
+    // C2: require a recent NAV sync. Share pricing depends on lp_nav being
+    // close to the real redeemable value (lp_vault + Kamino yield). If the
+    // caller did not bundle sync_kamino_yield recently, bail out — the
+    // frontend should prepend the sync instruction and retry.
+    let now = Clock::get()?.unix_timestamp;
+    let nav_age = now
+        .checked_sub(ctx.accounts.market.last_kamino_sync_ts)
+        .ok_or(AnemoneError::MathOverflow)?;
+    require!(nav_age < MAX_NAV_STALENESS_SECS, AnemoneError::StaleNav);
+
     let market = &mut ctx.accounts.market;
     let lp_position = &mut ctx.accounts.lp_position;
 
@@ -84,7 +94,7 @@ pub fn handle_deposit_liquidity(
     let shares = if market.total_lp_shares == 0 {
         amount
     } else {
-        let effective_deposits = market.total_lp_deposits
+        let effective_deposits = market.lp_nav
             .checked_sub(market.pending_withdrawals)
             .ok_or(AnemoneError::MathOverflow)?;
         (amount as u128)
@@ -135,7 +145,7 @@ pub fn handle_deposit_liquidity(
     )?;
 
     // Step 4: Update market state
-    market.total_lp_deposits = market.total_lp_deposits
+    market.lp_nav = market.lp_nav
         .checked_add(amount)
         .ok_or(AnemoneError::MathOverflow)?;
     market.total_lp_shares = market.total_lp_shares

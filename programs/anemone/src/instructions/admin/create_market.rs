@@ -38,7 +38,7 @@ pub struct CreateMarket<'info> {
         seeds = [b"market", underlying_reserve.key().as_ref(), &tenor_seconds.to_le_bytes()],
         bump
     )]
-    pub market: Account<'info, SwapMarket>,
+    pub market: Box<Account<'info, SwapMarket>>,
 
     /// LP vault: holds USDC in transit during settlements
     #[account(
@@ -129,7 +129,7 @@ pub fn handle_create_market(
     // = Frozen, NonTransferable, …) break invariants the protocol relies on —
     // a malicious TransferHook could re-enter `claim_withdrawal` mid-transfer;
     // PermanentDelegate lets an external pubkey drain `lp_vault` without the
-    // market PDA ever signing; TransferFee silently desyncs `total_lp_deposits`
+    // market PDA ever signing; TransferFee silently desyncs `lp_nav`
     // from `lp_vault.amount`. USDC on Solana is still classic SPL, so this
     // constraint does not block the intended use case. Lift to a per-extension
     // allowlist only when we actually want to onboard a Token-2022 mint.
@@ -160,7 +160,7 @@ pub fn handle_create_market(
     market.base_spread_bps = base_spread_bps;
 
     // State (all zeros on creation)
-    market.total_lp_deposits = 0;
+    market.lp_nav = 0;
     market.total_lp_shares = 0;
     market.total_fixed_notional = 0;
     market.total_variable_notional = 0;
@@ -172,6 +172,11 @@ pub fn handle_create_market(
     market.cumulative_fees_earned = 0;
     market.total_open_positions = 0;
     market.total_kamino_collateral = 0;
+    market.last_kamino_snapshot_usdc = 0;
+    // Seed with the clock so a fresh market is not instantly "stale" —
+    // callers have the full MAX_NAV_STALENESS_SECS window before the first
+    // sync_kamino_yield is required.
+    market.last_kamino_sync_ts = Clock::get()?.unix_timestamp;
 
     // Meta
     market.status = 0;

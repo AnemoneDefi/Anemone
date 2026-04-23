@@ -5,6 +5,7 @@ import { runUpdateRate } from "./jobs/updateRate";
 import { runSettlement } from "./jobs/settlement";
 import { runLiquidation } from "./jobs/liquidation";
 import { runPendingWithdrawals } from "./jobs/pendingWithdrawals";
+import { runSyncNav } from "./jobs/syncNav";
 import { logger } from "./utils/logger";
 
 async function main() {
@@ -47,11 +48,20 @@ async function main() {
     void runPendingWithdrawals(client, config);
   });
 
+  // syncNav: every 5 min. Keeps market.last_kamino_sync_ts under the
+  // MAX_NAV_STALENESS_SECS gate so user-facing LP ops don't have to bundle
+  // sync themselves during normal operation.
+  cron.schedule("*/5 * * * *", () => {
+    logger.debug("cron: syncNav tick");
+    void runSyncNav(client, config);
+  });
+
   // Run all jobs once on startup so we don't wait for the first cron tick.
   await runUpdateRate(client, config);
   await runSettlement(client, config);
   await runLiquidation(client, config);
   await runPendingWithdrawals(client, config);
+  await runSyncNav(client, config);
 
   logger.info("keeper: ready (cron scheduled)");
 

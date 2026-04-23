@@ -52,4 +52,6 @@ pub enum AnemoneError {
     ParamOutOfRange,
     #[msg("Mint uses an unsupported token program (only classic SPL Token allowed in v1)")]
     UnsupportedMintExtensions,
+    #[msg("LP NAV snapshot is stale — bundle sync_kamino_yield in the same transaction")]
+    StaleNav,
 }
