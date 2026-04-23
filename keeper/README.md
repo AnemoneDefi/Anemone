@@ -59,3 +59,35 @@ without depending on a live lending protocol.
 
 The default increment (1e12) bumps the rate index enough per 3-minute tick
 that `calculate_current_apy_from_index` produces an APY on the order of 10-15%.
+
+### Supported underlying mints (v1)
+
+Anemone v1 only accepts **classic SPL Token** mints (`spl_token::ID =
+TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA`). `create_market` rejects
+Token-2022 mints with `UnsupportedMintExtensions`.
+
+Why: Token-2022 extensions (TransferHook, PermanentDelegate, TransferFee,
+NonTransferable, DefaultAccountState=Frozen) break invariants the
+protocol relies on — a malicious TransferHook can re-enter
+`claim_withdrawal`, a PermanentDelegate can drain `lp_vault` without the
+market PDA, a TransferFee silently desyncs `total_lp_deposits`. USDC on
+Solana is still classic SPL so this does not block the intended use case.
+
+If you need to onboard a specific Token-2022 mint in the future, add an
+allow-list check on extension types (`MetadataPointer` and `TokenMetadata`
+are safe) rather than lifting the block wholesale.
+
+### Feature gating (mainnet safety)
+
+`set_rate_index_oracle` only exists in builds that include the `stub-oracle`
+Cargo feature. That feature is **default-on** for dev/devnet. Mainnet deploys
+must explicitly opt out:
+
+```
+anchor build -- --no-default-features   # or: yarn build:mainnet
+```
+
+Belt-and-suspenders: the keeper refuses to start with `USE_STUB_ORACLE=true` if
+`RPC_URL` looks like mainnet (see `MAINNET_RPC_SUBSTRINGS` in `src/config.ts`).
+A mainnet program simply does not contain the instruction — calling it returns
+`InstructionFallbackNotFound`.

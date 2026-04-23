@@ -1,5 +1,24 @@
 use anchor_lang::prelude::*;
 use crate::state::ProtocolState;
+use crate::errors::AnemoneError;
+
+// H5 fee caps. Calibrated against real DeFi comps (GMX, Pendle, Aave)
+// plus a healthy safety factor so an admin typo can't render the
+// protocol insolvent or DoS liquidations.
+//
+//   protocol_fee_bps    max 2000 = 20%  (perf fee on LP yield — generous)
+//   opening_fee_bps     max  100 = 1%   (paid by trader up-front)
+//   liquidation_fee_bps max 1000 = 10%  (keeper incentive — above 10%
+//                                       and liquidations become a
+//                                       profit center that destabilizes)
+//   withdrawal_fee_bps  max  100 = 1%   (LP exit friction)
+//   early_close_fee_bps max 2000 = 20%  (discourages churn without
+//                                       making exits punitive)
+pub const MAX_PROTOCOL_FEE_BPS: u16 = 2_000;
+pub const MAX_OPENING_FEE_BPS: u16 = 100;
+pub const MAX_LIQUIDATION_FEE_BPS: u16 = 1_000;
+pub const MAX_WITHDRAWAL_FEE_BPS: u16 = 100;
+pub const MAX_EARLY_CLOSE_FEE_BPS: u16 = 2_000;
 
 #[derive(Accounts)]
 pub struct InitializeProtocol<'info> {
@@ -29,6 +48,12 @@ pub fn handle_initialize_protocol(
     withdrawal_fee_bps: u16,
     early_close_fee_bps: u16,
 ) -> Result<()> {
+    require!(protocol_fee_bps    <= MAX_PROTOCOL_FEE_BPS,    AnemoneError::ParamOutOfRange);
+    require!(opening_fee_bps     <= MAX_OPENING_FEE_BPS,     AnemoneError::ParamOutOfRange);
+    require!(liquidation_fee_bps <= MAX_LIQUIDATION_FEE_BPS, AnemoneError::ParamOutOfRange);
+    require!(withdrawal_fee_bps  <= MAX_WITHDRAWAL_FEE_BPS,  AnemoneError::ParamOutOfRange);
+    require!(early_close_fee_bps <= MAX_EARLY_CLOSE_FEE_BPS, AnemoneError::ParamOutOfRange);
+
     let protocol_state = &mut ctx.accounts.protocol_state;
 
     protocol_state.authority = ctx.accounts.authority.key();

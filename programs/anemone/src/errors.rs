@@ -46,4 +46,10 @@ pub enum AnemoneError {
     NoPendingWithdrawal,
     #[msg("LP vault liquidity is insufficient for this claim — keeper must rebalance")]
     InsufficientVaultLiquidity,
+    #[msg("Rate index growth between settlements exceeds the circuit-breaker cap")]
+    RateMoveTooLarge,
+    #[msg("Parameter exceeds its protocol-level safety cap")]
+    ParamOutOfRange,
+    #[msg("Mint uses an unsupported token program (only classic SPL Token allowed in v1)")]
+    UnsupportedMintExtensions,
 }

@@ -9,7 +9,17 @@ crate-type = ["cdylib", "lib"]
 name = "anemone"
 
 [features]
-default = []
+# `stub-oracle` exposes the admin-only `set_rate_index_oracle` instruction used
+# to seed/update the rate index on clusters where Kamino K-Lend is not deployed
+# (localnet, devnet). It is DEFAULT-ENABLED so `anchor test` and devnet demos
+# work with zero extra flags.
+#
+# MAINNET BUILDS MUST OMIT THIS FEATURE. Use:
+#     anchor build --no-default-features
+# or the `build:mainnet` npm script. See deploy checklist in
+# docs/security-remediation-plan.md §Fase 5.
+default = ["stub-oracle"]
+stub-oracle = []
 cpi = ["no-entrypoint"]
 no-entrypoint = []
 no-idl = []
@@ -23,7 +33,7 @@ custom-panic = []
 [dependencies]
 anchor-lang = { version = "0.32.1", features = ["init-if-needed"] }
 anchor-spl = "0.32.1"
-kamino-lend = "0.4.1"
+kamino-lend = "=0.4.1"
 
 
 [lints.rust]
