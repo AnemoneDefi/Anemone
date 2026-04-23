@@ -54,4 +54,6 @@ pub enum AnemoneError {
     UnsupportedMintExtensions,
     #[msg("LP NAV snapshot is stale — bundle sync_kamino_yield in the same transaction")]
     StaleNav,
+    #[msg("Position has unpaid PnL owed by the LP vault — wait for keeper to refill and settle again")]
+    UnpaidPnlOutstanding,
 }

@@ -28,6 +28,26 @@ pub fn handle_update_rate_index(ctx: Context<UpdateRateIndex>) -> Result<()> {
     let reserve = ctx.accounts.kamino_reserve.load()?;
     let current_slot = Clock::get()?.slot;
 
+    // H2: defense-in-depth against Kamino struct layout drift. If a future
+    // kamino-lend bump changes field offsets without us noticing, reading
+    // `cumulative_borrow_rate_bsf` returns garbage — the Cargo.toml pin
+    // (Fase 0) stops silent version upgrades but does not catch a Kamino
+    // mainnet program upgrade that keeps the crate version. Cross-check
+    // that the reserve's underlying mint matches what the market was
+    // created with; if the offsets moved, this field almost certainly
+    // deserializes as something else and the compare fails loudly
+    // instead of us computing PnL against a junk rate index.
+    //
+    // Only enforced on mainnet builds (stub-oracle disabled). Devnet and
+    // localnet tests use fake mints paired with the Kamino mainnet reserve
+    // fixture, which would fail this check without undermining the actual
+    // safety property (there is no Kamino program to mis-read in stub mode).
+    #[cfg(not(feature = "stub-oracle"))]
+    require!(
+        reserve.liquidity.mint_pubkey == ctx.accounts.market.underlying_mint,
+        AnemoneError::InvalidReserve,
+    );
+
     // Reject stale reserve data — attacker could exploit outdated rates.
     // Only enforce when current_slot > reserve slot (skip on localnet where slots start at 0)
     let reserve_slot = reserve.last_update.slot;
