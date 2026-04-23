@@ -118,10 +118,41 @@ pub fn handle_close_position_early(ctx: Context<ClosePositionEarly>) -> Result<(
         )?
     };
 
-    // 2. Transfer mark-to-market PnL between vaults (same pattern as settle_period).
-    //    Track actual_delta so collateral_remaining matches reality when vaults are capped.
-    let actual_delta: i64 = if pnl > 0 {
-        let transfer_amount = (pnl as u64).min(ctx.accounts.lp_vault.amount);
+    // 2a. H1 catchup on existing unpaid_pnl before booking new MtM. Closing
+    //     is a final action — if we can't settle the old debt AND the new
+    //     PnL, we refuse (require at the end). Catchup first so the debt
+    //     has priority on the remaining lp_vault.
+    let catchup_amount: u64 = if position.unpaid_pnl > 0 && ctx.accounts.lp_vault.amount > 0 {
+        let amount = (position.unpaid_pnl as u64).min(ctx.accounts.lp_vault.amount);
+        if amount > 0 {
+            transfer_checked(
+                CpiContext::new_with_signer(
+                    ctx.accounts.token_program.to_account_info(),
+                    TransferChecked {
+                        from: ctx.accounts.lp_vault.to_account_info(),
+                        to: ctx.accounts.collateral_vault.to_account_info(),
+                        authority: ctx.accounts.market.to_account_info(),
+                        mint: ctx.accounts.underlying_mint.to_account_info(),
+                    },
+                    signer_seeds,
+                ),
+                amount,
+                ctx.accounts.underlying_mint.decimals,
+            )?;
+        }
+        amount
+    } else {
+        0
+    };
+
+    let vault_after_catchup = ctx.accounts.lp_vault.amount.saturating_sub(catchup_amount);
+
+    // 2b. Transfer mark-to-market PnL with shortfall tracking (same pattern
+    //     as settle_period). Shortfall from `pnl > 0` + vault short becomes
+    //     new unpaid_pnl — but we reject the close at the end if anything
+    //     remains unpaid.
+    let (actual_delta, shortfall): (i64, u64) = if pnl > 0 {
+        let transfer_amount = (pnl as u64).min(vault_after_catchup);
         if transfer_amount > 0 {
             transfer_checked(
                 CpiContext::new_with_signer(
@@ -138,7 +169,8 @@ pub fn handle_close_position_early(ctx: Context<ClosePositionEarly>) -> Result<(
                 ctx.accounts.underlying_mint.decimals,
             )?;
         }
-        transfer_amount as i64
+        let s = (pnl as u64).saturating_sub(transfer_amount);
+        (transfer_amount as i64, s)
     } else if pnl < 0 {
         let loss = ((-pnl) as u64).min(position.collateral_remaining);
         if loss > 0 {
@@ -157,18 +189,33 @@ pub fn handle_close_position_early(ctx: Context<ClosePositionEarly>) -> Result<(
                 ctx.accounts.underlying_mint.decimals,
             )?;
         }
-        -(loss as i64)
+        (-(loss as i64), 0u64)
     } else {
-        0
+        (0, 0)
     };
 
-    // 3. Apply actual_delta to the in-memory collateral value (used for fee calc below)
+    // 2c. Close must not leave a debt: require that all unpaid_pnl (prior +
+    //     new shortfall) has been cleared. If it hasn't, abort — the tx
+    //     reverts, catchup/MtM transfers included. Trader waits for keeper
+    //     to refill lp_vault and retries.
+    let unpaid_after: i64 = position.unpaid_pnl
+        .checked_sub(catchup_amount as i64)
+        .ok_or(AnemoneError::MathOverflow)?
+        .checked_add(shortfall as i64)
+        .ok_or(AnemoneError::MathOverflow)?;
+    require!(unpaid_after == 0, AnemoneError::UnpaidPnlOutstanding);
+
+    // 3. Apply (catchup + actual_delta) to the in-memory collateral value.
+    let collateral_after_catchup: u64 = position.collateral_remaining
+        .checked_add(catchup_amount)
+        .ok_or(AnemoneError::MathOverflow)?;
+
     let collateral_after_mtm: u64 = if actual_delta >= 0 {
-        position.collateral_remaining
+        collateral_after_catchup
             .checked_add(actual_delta as u64)
             .ok_or(AnemoneError::MathOverflow)?
     } else {
-        position.collateral_remaining
+        collateral_after_catchup
             .checked_sub((-actual_delta) as u64)
             .ok_or(AnemoneError::MathOverflow)?
     };
@@ -219,13 +266,18 @@ pub fn handle_close_position_early(ctx: Context<ClosePositionEarly>) -> Result<(
         )?;
     }
 
-    // 7. Update market totals + lp_nav to mirror the MtM transfer (C2).
+    // 7. Update market totals + lp_nav to mirror the MtM + catchup transfers
+    //    (C2 + H1). Total out of lp_vault = catchup + positive actual_delta.
     let market = &mut ctx.accounts.market;
-    if actual_delta > 0 {
+    let combined_out: i64 = (catchup_amount as i64)
+        .checked_add(actual_delta.max(0))
+        .ok_or(AnemoneError::MathOverflow)?;
+    if combined_out > 0 {
         market.lp_nav = market.lp_nav
-            .checked_sub(actual_delta as u64)
+            .checked_sub(combined_out as u64)
             .ok_or(AnemoneError::MathOverflow)?;
-    } else if actual_delta < 0 {
+    }
+    if actual_delta < 0 {
         market.lp_nav = market.lp_nav
             .checked_add((-actual_delta) as u64)
             .ok_or(AnemoneError::MathOverflow)?;

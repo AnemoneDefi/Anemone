@@ -13,7 +13,7 @@ pub struct ClaimMatured<'info> {
         seeds = [b"market", market.underlying_reserve.as_ref(), &market.tenor_seconds.to_le_bytes()],
         bump = market.bump,
     )]
-    pub market: Account<'info, SwapMarket>,
+    pub market: Box<Account<'info, SwapMarket>>,
 
     #[account(
         mut,
@@ -25,6 +25,13 @@ pub struct ClaimMatured<'info> {
         constraint = swap_position.status == PositionStatus::Matured @ AnemoneError::PositionNotMatured,
     )]
     pub swap_position: Account<'info, SwapPosition>,
+
+    /// LP vault — source of any unpaid_pnl catchup before claim.
+    #[account(
+        mut,
+        address = market.lp_vault @ AnemoneError::InvalidVault,
+    )]
+    pub lp_vault: Box<InterfaceAccount<'info, TokenAccount>>,
 
     /// Collateral vault — source of the matured collateral
     #[account(
@@ -57,22 +64,57 @@ pub fn handle_claim_matured(ctx: Context<ClaimMatured>) -> Result<()> {
     let position = &ctx.accounts.swap_position;
     let market = &ctx.accounts.market;
 
-    let amount = position.collateral_remaining;
     let direction = position.direction;
     let notional = position.notional;
 
-    // Transfer collateral_remaining from collateral_vault to owner (market PDA signs)
-    if amount > 0 {
-        let reserve_key = market.underlying_reserve;
-        let tenor_bytes = market.tenor_seconds.to_le_bytes();
-        let bump = market.bump;
-        let signer_seeds: &[&[&[u8]]] = &[&[
-            b"market",
-            reserve_key.as_ref(),
-            &tenor_bytes,
-            &[bump],
-        ]];
+    let reserve_key = market.underlying_reserve;
+    let tenor_bytes = market.tenor_seconds.to_le_bytes();
+    let bump = market.bump;
+    let signer_seeds: &[&[&[u8]]] = &[&[
+        b"market",
+        reserve_key.as_ref(),
+        &tenor_bytes,
+        &[bump],
+    ]];
 
+    // H1 catchup: after maturity, settle_period no longer runs (status is
+    // Matured, not Open), so any unpaid_pnl from the final settle can only
+    // be paid here. If the lp_vault is still short, the claim reverts with
+    // UnpaidPnlOutstanding — trader waits for the keeper to refill.
+    let catchup_amount: u64 = if position.unpaid_pnl > 0 && ctx.accounts.lp_vault.amount > 0 {
+        let amount = (position.unpaid_pnl as u64).min(ctx.accounts.lp_vault.amount);
+        if amount > 0 {
+            transfer_checked(
+                CpiContext::new_with_signer(
+                    ctx.accounts.token_program.to_account_info(),
+                    TransferChecked {
+                        from: ctx.accounts.lp_vault.to_account_info(),
+                        to: ctx.accounts.collateral_vault.to_account_info(),
+                        authority: ctx.accounts.market.to_account_info(),
+                        mint: ctx.accounts.underlying_mint.to_account_info(),
+                    },
+                    signer_seeds,
+                ),
+                amount,
+                ctx.accounts.underlying_mint.decimals,
+            )?;
+        }
+        amount
+    } else {
+        0
+    };
+
+    let unpaid_after: i64 = position.unpaid_pnl
+        .checked_sub(catchup_amount as i64)
+        .ok_or(AnemoneError::MathOverflow)?;
+    require!(unpaid_after == 0, AnemoneError::UnpaidPnlOutstanding);
+
+    let amount = position.collateral_remaining
+        .checked_add(catchup_amount)
+        .ok_or(AnemoneError::MathOverflow)?;
+
+    // Transfer (collateral_remaining + catchup) from collateral_vault to owner.
+    if amount > 0 {
         transfer_checked(
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
@@ -89,8 +131,13 @@ pub fn handle_claim_matured(ctx: Context<ClaimMatured>) -> Result<()> {
         )?;
     }
 
-    // Update market totals
+    // Update market totals + lp_nav for the catchup drain.
     let market = &mut ctx.accounts.market;
+    if catchup_amount > 0 {
+        market.lp_nav = market.lp_nav
+            .checked_sub(catchup_amount)
+            .ok_or(AnemoneError::MathOverflow)?;
+    }
     match direction {
         SwapDirection::PayFixed => {
             market.total_fixed_notional = market.total_fixed_notional

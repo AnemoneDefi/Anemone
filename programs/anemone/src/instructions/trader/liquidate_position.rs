@@ -128,12 +128,41 @@ pub fn handle_liquidate_position(ctx: Context<LiquidatePosition>) -> Result<()> 
         )?
     };
 
-    // Execute the MtM transfer between vaults. Capped by available balances —
-    // we never try to move more than the source holds. `actual_delta` is the
-    // real amount moved, which is what we then apply to the in-memory
-    // collateral for the MM check and fee calc.
-    let actual_delta: i64 = if pnl > 0 {
-        let transfer_amount = (pnl as u64).min(ctx.accounts.lp_vault.amount);
+    // H1 catchup on existing unpaid_pnl BEFORE the MtM so that a trader
+    // who is "stale underwater" only because the LP owed them money gets
+    // credited first and is no longer subject to liquidation.
+    let catchup_amount: u64 = if position.unpaid_pnl > 0 && ctx.accounts.lp_vault.amount > 0 {
+        let amount = (position.unpaid_pnl as u64).min(ctx.accounts.lp_vault.amount);
+        if amount > 0 {
+            transfer_checked(
+                CpiContext::new_with_signer(
+                    ctx.accounts.token_program.to_account_info(),
+                    TransferChecked {
+                        from: ctx.accounts.lp_vault.to_account_info(),
+                        to: ctx.accounts.collateral_vault.to_account_info(),
+                        authority: ctx.accounts.market.to_account_info(),
+                        mint: ctx.accounts.underlying_mint.to_account_info(),
+                    },
+                    signer_seeds,
+                ),
+                amount,
+                ctx.accounts.underlying_mint.decimals,
+            )?;
+        }
+        amount
+    } else {
+        0
+    };
+
+    let vault_after_catchup = ctx.accounts.lp_vault.amount.saturating_sub(catchup_amount);
+
+    // Execute the MtM transfer between vaults. Capped by available balances.
+    // Shortfall tracking same as settle_period (H1): new unpaid_pnl accrues
+    // if vault short, but we later reject the whole liquidation if anything
+    // is still unpaid — liquidation is final, can't leave trader with a
+    // residual credit.
+    let (actual_delta, shortfall): (i64, u64) = if pnl > 0 {
+        let transfer_amount = (pnl as u64).min(vault_after_catchup);
         if transfer_amount > 0 {
             transfer_checked(
                 CpiContext::new_with_signer(
@@ -150,7 +179,8 @@ pub fn handle_liquidate_position(ctx: Context<LiquidatePosition>) -> Result<()> 
                 ctx.accounts.underlying_mint.decimals,
             )?;
         }
-        transfer_amount as i64
+        let s = (pnl as u64).saturating_sub(transfer_amount);
+        (transfer_amount as i64, s)
     } else if pnl < 0 {
         let loss = ((-pnl) as u64).min(position.collateral_remaining);
         if loss > 0 {
@@ -169,27 +199,39 @@ pub fn handle_liquidate_position(ctx: Context<LiquidatePosition>) -> Result<()> 
                 ctx.accounts.underlying_mint.decimals,
             )?;
         }
-        -(loss as i64)
+        (-(loss as i64), 0u64)
     } else {
-        0
+        (0, 0)
     };
 
-    // Apply delta to the in-memory collateral (the vault was physically updated
-    // above, so collateral_mtm matches what's actually in collateral_vault).
+    // Reject liquidation if anything remains unpaid — LP still owes the
+    // trader but can't cover. Wait for keeper to refill and retry.
+    let unpaid_after: i64 = position.unpaid_pnl
+        .checked_sub(catchup_amount as i64)
+        .ok_or(AnemoneError::MathOverflow)?
+        .checked_add(shortfall as i64)
+        .ok_or(AnemoneError::MathOverflow)?;
+    require!(unpaid_after == 0, AnemoneError::UnpaidPnlOutstanding);
+
+    // Apply catchup + delta to in-memory collateral.
+    let collateral_after_catchup: u64 = position.collateral_remaining
+        .checked_add(catchup_amount)
+        .ok_or(AnemoneError::MathOverflow)?;
+
     let collateral_mtm: u64 = if actual_delta >= 0 {
-        position.collateral_remaining
+        collateral_after_catchup
             .checked_add(actual_delta as u64)
             .ok_or(AnemoneError::MathOverflow)?
     } else {
-        position.collateral_remaining
+        collateral_after_catchup
             .checked_sub((-actual_delta) as u64)
             .ok_or(AnemoneError::MathOverflow)?
     };
 
-    // NOW check maintenance margin with the MtM-adjusted collateral. If the
-    // position is actually healthy after MtM, the whole tx reverts — including
-    // the MtM transfer above. The LP only keeps the PnL if the position is
-    // truly underwater.
+    // NOW check maintenance margin with the MtM-adjusted collateral (post-
+    // catchup). If the position is healthy after we paid the old debt, the
+    // whole tx reverts — including both transfers. Liquidation only
+    // succeeds when trader is genuinely underwater.
     let maintenance = calculate_maintenance_margin(notional, market.tenor_seconds)?;
     require!(
         collateral_mtm < maintenance,
@@ -239,13 +281,18 @@ pub fn handle_liquidate_position(ctx: Context<LiquidatePosition>) -> Result<()> 
         )?;
     }
 
-    // Update market totals + lp_nav to mirror the MtM transfer (C2).
+    // Update market totals + lp_nav to mirror the MtM + catchup transfers
+    // (C2 + H1). Total out of lp_vault = catchup + positive actual_delta.
     let market = &mut ctx.accounts.market;
-    if actual_delta > 0 {
+    let combined_out: i64 = (catchup_amount as i64)
+        .checked_add(actual_delta.max(0))
+        .ok_or(AnemoneError::MathOverflow)?;
+    if combined_out > 0 {
         market.lp_nav = market.lp_nav
-            .checked_sub(actual_delta as u64)
+            .checked_sub(combined_out as u64)
             .ok_or(AnemoneError::MathOverflow)?;
-    } else if actual_delta < 0 {
+    }
+    if actual_delta < 0 {
         market.lp_nav = market.lp_nav
             .checked_add((-actual_delta) as u64)
             .ok_or(AnemoneError::MathOverflow)?;

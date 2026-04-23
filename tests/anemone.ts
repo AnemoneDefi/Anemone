@@ -1448,6 +1448,7 @@ describe("anemone", () => {
           .accountsStrict({
             market: claimMarketPda,
             swapPosition: claimSwapPositionPda,
+            lpVault: claimLpVaultPda,
             collateralVault: claimCollateralVaultPda,
             ownerTokenAccount: ownerTokenAccount,
             underlyingMint: underlyingMint.publicKey,
@@ -1489,6 +1490,7 @@ describe("anemone", () => {
           .accountsStrict({
             market: claimMarketPda,
             swapPosition: claimSwapPositionPda,
+            lpVault: claimLpVaultPda,
             collateralVault: claimCollateralVaultPda,
             ownerTokenAccount: fakeOwnerTokenAccount,
             underlyingMint: underlyingMint.publicKey,
@@ -1782,6 +1784,7 @@ describe("anemone", () => {
         .accountsStrict({
           market: shortMarketPda,
           swapPosition: shortSwapPositionPda,
+          lpVault: shortLpVaultPda,
           collateralVault: shortCollateralVaultPda,
           ownerTokenAccount: shortTraderTokenAccount,
           underlyingMint: underlyingMint.publicKey,
@@ -2753,9 +2756,10 @@ describe("anemone", () => {
     // + 8 (fixed_rate_bps) + 8 (collateral_deposited)
     // + 8 (collateral_remaining) + 16 (entry_rate_index)
     // + 16 (last_settled_rate_index) + 8 (realized_pnl) + 2 (num_settlements)
-    // + 8 (open_ts) + 8 (maturity_ts) + 8 (next_settlement_ts) + 8 (last_settlement_ts)
-    // = 177
-    const KEEPER_STATUS_OFFSET = 177;
+    // + 8 (unpaid_pnl) + 8 (open_ts) + 8 (maturity_ts)
+    // + 8 (next_settlement_ts) + 8 (last_settlement_ts)
+    // = 185
+    const KEEPER_STATUS_OFFSET = 185;
     const STATUS_OPEN = 0;
 
     it("blocks the old authority from calling deposit_to_kamino after rotation", async () => {

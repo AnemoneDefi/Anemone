@@ -19,12 +19,14 @@ const SAFETY_BUFFER_BPS = 500n; // 5%
 const BPS_DIVISOR = 10_000n;
 
 /**
- * Scans for LP positions stuck in PendingWithdrawal status and, when the
- * lp_vault is too shallow to pay them all, instructs Kamino to redeem
- * k-tokens back into USDC.
+ * Scans for debts the lp_vault owes — both LP withdrawals queued pending
+ * (LpPosition.status == PendingWithdrawal) and trader PnL that couldn't be
+ * paid in full at settlement (SwapPosition.unpaid_pnl > 0, H1). Groups by
+ * market, totals the owed amount, and instructs Kamino to redeem k-tokens
+ * back into USDC when the vault is short.
  *
  * On devnet with USE_STUB_ORACLE=true there is no Kamino integration —
- * the vault always holds all LP USDC and the queue path never triggers.
+ * the vault always holds all LP USDC and the queue path rarely triggers.
  * The job still runs (logs a no-op) so the same binary works in both modes.
  */
 export async function runPendingWithdrawals(
@@ -41,13 +43,22 @@ export async function runPendingWithdrawals(
       },
     ]);
 
-    if (pending.length === 0) {
+    // H1: also fetch SwapPositions with unpaid_pnl > 0. The field is the
+    // 13th in the struct so the memcmp-by-status trick doesn't apply —
+    // fetch all positions and filter client-side. Good enough for MVP;
+    // mainnet should index via Helius/Geyser to avoid the full scan.
+    const allPositions = await (client.program.account as any).swapPosition.all();
+    const unpaidPositions = allPositions.filter(
+      (p: any) => BigInt(p.account.unpaidPnl?.toString?.() ?? "0") > 0n,
+    );
+
+    if (pending.length === 0 && unpaidPositions.length === 0) {
       logger.debug("pending-withdrawals: none queued");
       return;
     }
 
-    // Group by market. In MVP there is only one, but keeping the shape
-    // market-agnostic so multi-market deployments work without changes.
+    // Group LP pending by market. In MVP there is only one, but keeping the
+    // shape market-agnostic so multi-market deployments work without changes.
     const byMarket = new Map<string, typeof pending>();
     for (const p of pending) {
       const key = p.account.market.toBase58();
@@ -56,12 +67,26 @@ export async function runPendingWithdrawals(
       byMarket.set(key, bucket);
     }
 
+    // Also bucket trader unpaid_pnl by market so the vault-refill math
+    // includes both sources of debt.
+    const unpaidByMarket = new Map<string, bigint>();
+    for (const p of unpaidPositions) {
+      const key = p.account.market.toBase58();
+      const amt = BigInt(p.account.unpaidPnl.toString());
+      unpaidByMarket.set(key, (unpaidByMarket.get(key) ?? 0n) + amt);
+      if (!byMarket.has(key)) {
+        byMarket.set(key, [] as any);
+      }
+    }
+
     for (const [marketBase58, positions] of byMarket) {
       const marketPk = new PublicKey(marketBase58);
-      const totalOwed = positions.reduce(
+      const lpOwed = positions.reduce(
         (acc: bigint, p: any) => acc + BigInt(p.account.withdrawalAmount.toString()),
         0n,
       );
+      const traderUnpaid = unpaidByMarket.get(marketBase58) ?? 0n;
+      const totalOwed = lpOwed + traderUnpaid;
 
       const lpVaultPk = deriveLpVaultPda(marketPk, config.programId);
       const vault = await getAccount(client.connection, lpVaultPk);
@@ -71,11 +96,13 @@ export async function runPendingWithdrawals(
         logger.info(
           {
             market: marketBase58,
-            pending: positions.length,
+            pendingLps: positions.length,
+            lpOwed: lpOwed.toString(),
+            traderUnpaid: traderUnpaid.toString(),
             totalOwed: totalOwed.toString(),
             vaultBalance: vaultBalance.toString(),
           },
-          "pending-withdrawals: vault has enough, LPs can claim directly",
+          "pending-withdrawals: vault has enough for all debts",
         );
         continue;
       }
@@ -87,7 +114,9 @@ export async function runPendingWithdrawals(
       logger.warn(
         {
           market: marketBase58,
-          pending: positions.length,
+          pendingLps: positions.length,
+          lpOwed: lpOwed.toString(),
+          traderUnpaid: traderUnpaid.toString(),
           totalOwed: totalOwed.toString(),
           vaultBalance: vaultBalance.toString(),
           shortfall: rawShortfall.toString(),
