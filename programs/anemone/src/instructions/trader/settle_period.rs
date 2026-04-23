@@ -108,12 +108,42 @@ pub fn handle_settle_period(ctx: Context<SettlePeriod>) -> Result<()> {
         &[bump],
     ]];
 
-    // Track the actual amount moved between vaults — used to update collateral_remaining
-    // This ensures accounting matches the real vault balance (bug fix: H1)
-    let actual_delta: i64 = if pnl > 0 {
-        // Trader profits — transfer from lp_vault to collateral_vault
-        // Capped by lp_vault balance (LP cannot pay more than it has)
-        let transfer_amount = (pnl as u64).min(ctx.accounts.lp_vault.amount);
+    // H1 phase 1 — catchup on any existing unpaid_pnl. The trader's prior
+    // credit against the LP vault is paid first (before new PnL) so the
+    // oldest debt gets settled whenever the vault has room. Caps by current
+    // vault balance — if still short, unpaid stays on the position.
+    let catchup_amount: u64 = if position.unpaid_pnl > 0 && ctx.accounts.lp_vault.amount > 0 {
+        let amount = (position.unpaid_pnl as u64).min(ctx.accounts.lp_vault.amount);
+        if amount > 0 {
+            transfer_checked(
+                CpiContext::new_with_signer(
+                    ctx.accounts.token_program.to_account_info(),
+                    TransferChecked {
+                        from: ctx.accounts.lp_vault.to_account_info(),
+                        to: ctx.accounts.collateral_vault.to_account_info(),
+                        authority: ctx.accounts.market.to_account_info(),
+                        mint: ctx.accounts.underlying_mint.to_account_info(),
+                    },
+                    signer_seeds,
+                ),
+                amount,
+                ctx.accounts.underlying_mint.decimals,
+            )?;
+        }
+        amount
+    } else {
+        0
+    };
+
+    // Remaining lp_vault balance after catchup drained part of it.
+    let vault_after_catchup = ctx.accounts.lp_vault.amount.saturating_sub(catchup_amount);
+
+    // H1 phase 2 — execute the new PnL transfer. Tracks `shortfall`: the
+    // portion of `pnl > 0` that the vault could not cover, which becomes
+    // new unpaid_pnl. `actual_delta` is what *physically* moved to the
+    // trader's collateral side (post-catchup, post-PnL).
+    let (actual_delta, shortfall): (i64, u64) = if pnl > 0 {
+        let transfer_amount = (pnl as u64).min(vault_after_catchup);
 
         if transfer_amount > 0 {
             transfer_checked(
@@ -132,10 +162,12 @@ pub fn handle_settle_period(ctx: Context<SettlePeriod>) -> Result<()> {
             )?;
         }
 
-        transfer_amount as i64
+        let shortfall = (pnl as u64).saturating_sub(transfer_amount);
+        (transfer_amount as i64, shortfall)
     } else if pnl < 0 {
-        // Trader loses — transfer from collateral_vault to lp_vault
-        // Capped by collateral_remaining (trader cannot lose more than they have)
+        // Trader loses — capped by collateral_remaining (trader can never
+        // lose more than they have). No unpaid_pnl accrues on this side;
+        // the protocol-LP relationship is asymmetric by design.
         let loss = ((-pnl) as u64).min(position.collateral_remaining);
 
         if loss > 0 {
@@ -155,9 +187,9 @@ pub fn handle_settle_period(ctx: Context<SettlePeriod>) -> Result<()> {
             )?;
         }
 
-        -(loss as i64)
+        (-(loss as i64), 0u64)
     } else {
-        0
+        (0, 0)
     };
 
     // Capture immutable reads before taking any &mut borrow on market.
@@ -166,24 +198,46 @@ pub fn handle_settle_period(ctx: Context<SettlePeriod>) -> Result<()> {
     let tenor_seconds = market.tenor_seconds;
 
     // 6. Update lp_nav to mirror the USDC that physically moved between vaults.
-    //    When trader profits (actual_delta > 0), USDC left the lp_vault → lp_nav
-    //    shrinks. When trader loses, USDC came into the lp_vault → lp_nav grows.
-    //    Keeping lp_nav in sync here is what makes share price reflect
-    //    realized PnL (C2).
+    //    `catchup_amount` is lp_vault → collateral (LP paying old debt),
+    //    `actual_delta` is this period's PnL transfer. Combined they are the
+    //    net change in lp_vault → lp_nav moves by -(catchup + actual_delta).
+    //    Shortfall accrues to unpaid_pnl but does NOT touch lp_nav — lp_nav
+    //    tracks "vault+kamino" state, and the trader credit is a separate
+    //    liability tracked on the position (summed by the keeper refill job).
+    let combined_out: i64 = (catchup_amount as i64)
+        .checked_add(actual_delta.max(0))
+        .ok_or(AnemoneError::MathOverflow)?;
+    let combined_in: i64 = if actual_delta < 0 { -actual_delta } else { 0 };
+
     let market_mut = &mut ctx.accounts.market;
-    if actual_delta > 0 {
+    if combined_out > 0 {
         market_mut.lp_nav = market_mut.lp_nav
-            .checked_sub(actual_delta as u64)
+            .checked_sub(combined_out as u64)
             .ok_or(AnemoneError::MathOverflow)?;
-    } else if actual_delta < 0 {
+    }
+    if combined_in > 0 {
         market_mut.lp_nav = market_mut.lp_nav
-            .checked_add((-actual_delta) as u64)
+            .checked_add(combined_in as u64)
             .ok_or(AnemoneError::MathOverflow)?;
     }
 
-    // 7. Update position state using the actual transferred amount
+    // 7. Update position state. Catchup raises collateral (trader got paid
+    //    old debt); unpaid_pnl drops by the same amount. New PnL transfer
+    //    then adjusts collateral by actual_delta, and shortfall accrues to
+    //    unpaid_pnl for the next catchup window.
     let position = &mut ctx.accounts.swap_position;
 
+    // Apply catchup
+    if catchup_amount > 0 {
+        position.collateral_remaining = position.collateral_remaining
+            .checked_add(catchup_amount)
+            .ok_or(AnemoneError::MathOverflow)?;
+        position.unpaid_pnl = position.unpaid_pnl
+            .checked_sub(catchup_amount as i64)
+            .ok_or(AnemoneError::MathOverflow)?;
+    }
+
+    // Apply this period's PnL
     if actual_delta > 0 {
         position.collateral_remaining = position.collateral_remaining
             .checked_add(actual_delta as u64)
@@ -191,6 +245,13 @@ pub fn handle_settle_period(ctx: Context<SettlePeriod>) -> Result<()> {
     } else if actual_delta < 0 {
         position.collateral_remaining = position.collateral_remaining
             .checked_sub((-actual_delta) as u64)
+            .ok_or(AnemoneError::MathOverflow)?;
+    }
+
+    // Accrue shortfall (pnl > actual transferred) as new unpaid_pnl.
+    if shortfall > 0 {
+        position.unpaid_pnl = position.unpaid_pnl
+            .checked_add(shortfall as i64)
             .ok_or(AnemoneError::MathOverflow)?;
     }
 
