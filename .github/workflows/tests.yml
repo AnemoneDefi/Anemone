@@ -96,3 +96,37 @@ jobs:
 
       - name: Run tests
         run: anchor test --skip-build
+
+      # Fase 5 Parte 3 — CI extensions
+      #
+      # Anchor tests above validate devnet flow against localnet (stub-oracle).
+      # The checks below guard things Anchor's harness doesn't touch: unit
+      # tests (including the Kamino Reserve layout pin from H2), mainnet
+      # build shape, a dependency-vulnerability scan, and a lint pass.
+      #
+      # Clippy and cargo-audit are `continue-on-error: true` on purpose —
+      # they gate on transitive crate advisories and lint noise we don't
+      # want blocking security merges. Flip to false once the baselines are
+      # clean.
+
+      - name: Unit tests + Kamino layout pin
+        run: cargo test -p anemone --tests
+
+      - name: Mainnet build check (no stub-oracle)
+        run: |
+          yarn build:mainnet
+          if grep -q 'setRateIndexOracle' target/idl/anemone.json; then
+            echo "::error::setRateIndexOracle leaked into the mainnet IDL — stub-oracle feature guard failed"
+            exit 1
+          fi
+          echo "Mainnet IDL is free of setRateIndexOracle ✓"
+
+      - name: Cargo clippy
+        continue-on-error: true
+        run: cargo clippy -p anemone -- -D warnings
+
+      - name: Cargo audit
+        continue-on-error: true
+        uses: rustsec/audit-check@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
