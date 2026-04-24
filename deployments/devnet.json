@@ -1,0 +1,23 @@
+{
+  "cluster": "devnet",
+  "programId": "KQs6ci5FtedFKPVJThAZSMMXyosK4TvnF7kcDSx5Jwd",
+  "upgradeAuthority": "4AGLdo9MUsGpMrQxuYTrNJnLW4Yqn73Zvk6EGVJFNiXf",
+  "protocolState": "C41Pd8Nbf7LTsJNddpkirLEnW2iPZ6PBd3bgUVYXdggy",
+  "market": "EgKX6krSFBFhCEvnuQxsFRHdLwh5V6y8H8wYNafqoAa8",
+  "usdcMint": "9sDngv78Gs4Q9A8g2ibB33NpZpVVLDieHXEtaEHN6f3L",
+  "lpVault": "CEuhNevbGgGADPw6cJNwVH1vqXLoXTLqRehzGaUxdGBx",
+  "collateralVault": "CfMXBBuQNNzALaKLvDTLmLzg356idgSyESitpx8s9cRp",
+  "lpMint": "C1xuyCzwZK8wmwbFEyduBLok92h3RMaf23sUGgJggoZe",
+  "kaminoDepositAccount": "WxFAVfD4GomboAP7qtXodauRL9i5xv26XjcP2gBsNd1",
+  "fakeKaminoCollateralMint": "9K27KY6Zj71Qjx7dejmRsvgKXx5UxtNennBiMSNRbXJZ",
+  "fakeUnderlyingReserve": "9dVEWE3J1DP2sAQwhfZXwqvZdS187jLQfhBegsEpLprf",
+  "fakeUnderlyingProtocol": "APHXSAVxQRdyU5JCs5vEwtnLnXENkjQuS8eYDdGzDbBZ",
+  "treasury": "Gz9nfMxzyiNtGZf9MZ6JCNEDMi4iE6imiAuX7Mj7tsfk",
+  "keeper": "5eAHLCLBwTjb7o6DsrzJZRAGoAKw4N5WtRieXWEBY91d",
+  "deployer": "BKgkBoCuioUm7Mvv2HZdWsCEDraCFxC8DQNHKoTtSzX1",
+  "tenorSeconds": 2592000,
+  "settlementPeriodSeconds": 86400,
+  "maxUtilizationBps": 6000,
+  "baseSpreadBps": 80,
+  "deployedAt": "2026-04-24T18:47:41.069Z"
+}

@@ -95,7 +95,7 @@ if [ "$CLUSTER" = "mainnet" ]; then
     anchor deploy --provider.cluster mainnet-beta
     echo
     echo "Transferring upgrade authority to $UPGRADE_AUTHORITY..."
-    solana program set-upgrade-authority "$PROGRAM_ID" --new-upgrade-authority "$UPGRADE_AUTHORITY"
+    solana program set-upgrade-authority "$PROGRAM_ID" --new-upgrade-authority "$UPGRADE_AUTHORITY" --skip-new-upgrade-authority-signer-check
     echo "Mainnet deploy complete. Verify with: solana program show $PROGRAM_ID --url mainnet-beta"
 
 elif [ "$CLUSTER" = "devnet" ]; then
@@ -118,7 +118,7 @@ elif [ "$CLUSTER" = "devnet" ]; then
     if [ -n "${UPGRADE_AUTHORITY:-}" ] && [ "$UPGRADE_AUTHORITY" != "$LOCAL_PUBKEY" ]; then
         echo
         echo "Transferring upgrade authority to $UPGRADE_AUTHORITY..."
-        solana program set-upgrade-authority "$PROGRAM_ID" --new-upgrade-authority "$UPGRADE_AUTHORITY"
+        solana program set-upgrade-authority "$PROGRAM_ID" --new-upgrade-authority "$UPGRADE_AUTHORITY" --skip-new-upgrade-authority-signer-check
     fi
 
     echo "Devnet deploy complete. Verify with: solana program show $PROGRAM_ID --url devnet"
