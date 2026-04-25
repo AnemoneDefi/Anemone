@@ -8,6 +8,9 @@ skip-lint = false
 [programs.localnet]
 anemone = "KQs6ci5FtedFKPVJThAZSMMXyosK4TvnF7kcDSx5Jwd"
 
+[programs.devnet]
+anemone = "KQs6ci5FtedFKPVJThAZSMMXyosK4TvnF7kcDSx5Jwd"
+
 [registry]
 url = "https://api.apr.dev"
 
