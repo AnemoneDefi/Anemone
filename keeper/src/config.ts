@@ -23,6 +23,21 @@ export interface KeeperConfig {
    * cluster load via env var PRIORITY_FEE_MICROLAMPORTS.
    */
   priorityFeeMicrolamports: number;
+  /**
+   * Optional bridge mode: when USE_STUB_ORACLE=true and this is set, instead
+   * of incrementing the rate index linearly via stubRateIncrement, the keeper
+   * reads the live `cumulative_borrow_rate_bsf` from the Kamino USDC Reserve
+   * on the URL provided here and pushes the real value through
+   * `set_rate_index_oracle` on the configured RPC. This gives a devnet (or
+   * Surfpool) deployment access to the actual mainnet rate evolution without
+   * requiring a real Kamino CPI. Devnet stays publicly accessible while the
+   * rate that drives settlements is the real one.
+   *
+   * Set to a mainnet RPC (Helius, QuickNode, Alchemy, or
+   * `https://api.mainnet-beta.solana.com`) to enable. Leave undefined for
+   * the legacy linear-stub behaviour.
+   */
+  bridgeMainnetRpcUrl?: string;
 }
 
 function loadKeypair(path: string): Keypair {
@@ -82,6 +97,8 @@ export function loadConfig(): KeeperConfig {
   const adminKeypair =
     useStubOracle && adminPath ? loadKeypair(adminPath) : null;
 
+  const bridgeMainnetRpcUrl = process.env.BRIDGE_MAINNET_RPC_URL || undefined;
+
   return {
     rpcUrl,
     programId,
@@ -92,5 +109,6 @@ export function loadConfig(): KeeperConfig {
     keeperKeypair,
     adminKeypair,
     priorityFeeMicrolamports,
+    bridgeMainnetRpcUrl,
   };
 }
