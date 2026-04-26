@@ -1405,10 +1405,12 @@ describe("anemone", () => {
         await program.methods
           .settlePeriod()
           .accountsStrict({
+            protocolState: protocolStatePda,
             market: settleMarketPda,
             swapPosition: settleSwapPositionPda,
             lpVault: settleLpVaultPda,
             collateralVault: settleCollateralVaultPda,
+            treasury: treasury.publicKey,
             underlyingMint: underlyingMint.publicKey,
             caller: authority.publicKey,
             tokenProgram: TOKEN_PROGRAM_ID,
@@ -1439,10 +1441,12 @@ describe("anemone", () => {
         const tx = await program.methods
           .settlePeriod()
           .accountsStrict({
+            protocolState: protocolStatePda,
             market: settleMarketPda,
             swapPosition: settleSwapPositionPda,
             lpVault: settleLpVaultPda,
             collateralVault: settleCollateralVaultPda,
+            treasury: treasury.publicKey,
             underlyingMint: underlyingMint.publicKey,
             caller: authority.publicKey,
             tokenProgram: TOKEN_PROGRAM_ID,
@@ -1654,6 +1658,7 @@ describe("anemone", () => {
             owner: authority.publicKey,
             ownerTokenAccount: ownerTokenAccount,
             liquidatorTokenAccount: liquidatorTokenAccount,
+            treasury: treasury.publicKey,
             underlyingMint: underlyingMint.publicKey,
             liquidator: liquidator.publicKey,
             tokenProgram: TOKEN_PROGRAM_ID,
@@ -1869,10 +1874,12 @@ describe("anemone", () => {
         await program.methods
           .settlePeriod()
           .accountsStrict({
+            protocolState: protocolStatePda,
             market: shortMarketPda,
             swapPosition: shortSwapPositionPda,
             lpVault: shortLpVaultPda,
             collateralVault: shortCollateralVaultPda,
+            treasury: treasury.publicKey,
             underlyingMint: underlyingMint.publicKey,
             caller: authority.publicKey,
             tokenProgram: TOKEN_PROGRAM_ID,
@@ -2169,10 +2176,12 @@ describe("anemone", () => {
       for (let i = 0; i < 10 && settlementsRun < MAX_SETTLES_NEEDED; i++) {
         try {
           await program.methods.settlePeriod().accountsStrict({
+            protocolState: protocolStatePda,
             market: liqMarketPda,
             swapPosition: liqSwapPosPda,
             lpVault: liqLpVaultPda,
             collateralVault: liqCollateralVaultPda,
+            treasury: treasury.publicKey,
             underlyingMint: underlyingMint.publicKey,
             caller: authority.publicKey,
             tokenProgram: TOKEN_PROGRAM_ID,
@@ -2238,6 +2247,7 @@ describe("anemone", () => {
             owner: authority.publicKey,
             ownerTokenAccount: liqOwnerReceiptToken,
             liquidatorTokenAccount: liqLiquidatorToken,
+            treasury: treasury.publicKey,
             underlyingMint: underlyingMint.publicKey,
             liquidator: liquidator.publicKey,
             tokenProgram: TOKEN_PROGRAM_ID,
@@ -3295,6 +3305,131 @@ describe("anemone", () => {
           authority: authority.publicKey,
         })
         .rpc();
+    });
+  });
+
+  describe("pause_market / unpause_market (per-market pause)", () => {
+    // We use the fake-protocol marketPda (already initialised earlier in the
+    // suite) so we can flip status without disturbing the Kamino markets that
+    // later tests depend on.
+    it("rejects pause_market from a non-admin signer", async () => {
+      const stranger = Keypair.generate();
+      const sig = await provider.connection.requestAirdrop(stranger.publicKey, 1_000_000_000);
+      const bh = await provider.connection.getLatestBlockhash();
+      await provider.connection.confirmTransaction({
+        signature: sig,
+        blockhash: bh.blockhash,
+        lastValidBlockHeight: bh.lastValidBlockHeight,
+      });
+
+      try {
+        await program.methods
+          .pauseMarket()
+          .accountsStrict({
+            protocolState: protocolStatePda,
+            market: marketPda,
+            authority: stranger.publicKey,
+          })
+          .signers([stranger])
+          .rpc();
+        assert.fail("Should have rejected — non-admin");
+      } catch (err: any) {
+        assert.include(err.toString(), "InvalidAuthority");
+        console.log("pause_market correctly rejected non-admin ✓");
+      }
+    });
+
+    it("admin pauses a market and open_swap reverts with MarketPaused", async () => {
+      // Pause the market.
+      await program.methods
+        .pauseMarket()
+        .accountsStrict({
+          protocolState: protocolStatePda,
+          market: marketPda,
+          authority: authority.publicKey,
+        })
+        .rpc();
+      const m = await program.account.swapMarket.fetch(marketPda);
+      assert.equal(m.status, 1, "market.status should be 1 (paused)");
+
+      // Try to open a swap on the paused market — must fail with MarketPaused.
+      // We deliberately reuse a non-trivial swap PDA so init can run; the
+      // constraint on `market.status == 0` fires in account validation
+      // before the handler body.
+      const pauseTrader = Keypair.generate();
+      const airdropSig = await provider.connection.requestAirdrop(pauseTrader.publicKey, 1_000_000_000);
+      const bh = await provider.connection.getLatestBlockhash();
+      await provider.connection.confirmTransaction({
+        signature: airdropSig,
+        blockhash: bh.blockhash,
+        lastValidBlockHeight: bh.lastValidBlockHeight,
+      });
+      const traderToken = await createAccount(
+        provider.connection,
+        (authority as any).payer,
+        underlyingMint.publicKey,
+        pauseTrader.publicKey,
+      );
+      await mintTo(
+        provider.connection,
+        (authority as any).payer,
+        underlyingMint.publicKey,
+        traderToken,
+        authority.publicKey,
+        1_000_000_000,
+      );
+
+      const [pausedSwapPos] = PublicKey.findProgramAddressSync(
+        [
+          Buffer.from("swap"),
+          pauseTrader.publicKey.toBuffer(),
+          marketPda.toBuffer(),
+          Buffer.from([7]),
+        ],
+        program.programId,
+      );
+
+      try {
+        await program.methods
+          .openSwap(
+            { payFixed: {} } as any,
+            new anchor.BN(1_000_000_000),
+            7,
+            new anchor.BN(10_000),
+            new anchor.BN(0),
+          )
+          .accountsStrict({
+            protocolState: protocolStatePda,
+            market: marketPda,
+            swapPosition: pausedSwapPos,
+            collateralVault: collateralVaultPda,
+            treasury: treasury.publicKey,
+            underlyingMint: underlyingMint.publicKey,
+            traderTokenAccount: traderToken,
+            trader: pauseTrader.publicKey,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+          })
+          .signers([pauseTrader])
+          .rpc();
+        assert.fail("Should have rejected — market paused");
+      } catch (err: any) {
+        assert.include(err.toString(), "MarketPaused");
+        console.log("open_swap correctly rejected on paused market ✓");
+      }
+
+      // Unpause and verify state cleared.
+      await program.methods
+        .unpauseMarket()
+        .accountsStrict({
+          protocolState: protocolStatePda,
+          market: marketPda,
+          authority: authority.publicKey,
+        })
+        .rpc();
+      const m2 = await program.account.swapMarket.fetch(marketPda);
+      assert.equal(m2.status, 0, "market.status should be 0 (active) after unpause");
+      console.log("unpause_market clears the flag ✓");
     });
   });
 });

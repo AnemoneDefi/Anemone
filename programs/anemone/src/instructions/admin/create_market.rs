@@ -168,7 +168,6 @@ pub fn handle_create_market(
     market.previous_rate_update_ts = 0;
     market.current_rate_index = 0;
     market.last_rate_update_ts = 0;
-    market.cumulative_fees_earned = 0;
     market.total_open_positions = 0;
     market.total_kamino_collateral = 0;
     market.last_kamino_snapshot_usdc = 0;
