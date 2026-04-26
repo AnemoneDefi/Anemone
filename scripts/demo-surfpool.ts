@@ -539,35 +539,17 @@ async function main() {
   console.log(`  collateral_remaining: ${positionAfterSettle.collateralRemaining.toNumber() / 1e6} USDC`);
 
   // ---------------------------------------------------------------------------
-  header("Phase 12 — close_position_early bundled with trader-signed Kamino withdraw");
+  header("Phase 12 — close_position_early (internal Kamino redeem on shortfall)");
 
-  // Trader self-rescue: bundles `withdraw_from_kamino` as a preInstruction
-  // signed by the trader (NOT the keeper). Proves that after PR #25's
-  // permissionless change, traders can exit without depending on a live
-  // keeper. lp_vault doesn't actually need this top-up here (Phase 11 left
-  // ~11.78 USDC in it), but we run it to exercise the production pattern
-  // — and it stresses that the `caller` signer = trader works on-chain.
-  const traderSelfRescueIx = await program.methods
-    .withdrawFromKamino(new anchor.BN(JIT_WITHDRAW_K_USDC))
-    .accountsStrict({
-      protocolState: protocolStatePda,
-      caller: trader.publicKey,
-      market: marketPda,
-      lpVault: lpVaultPda,
-      kaminoDepositAccount: kaminoDepositPda,
-      kaminoReserve: KAMINO_USDC_RESERVE,
-      kaminoLendingMarket: lendingMarket,
-      kaminoLendingMarketAuthority: lendingMarketAuthority,
-      reserveLiquidityMint: USDC_MINT,
-      reserveLiquiditySupply: reserveLiquiditySupply,
-      reserveCollateralMint: reserveCollateralMint,
-      collateralTokenProgram: TOKEN_PROGRAM_ID,
-      liquidityTokenProgram: TOKEN_PROGRAM_ID,
-      instructionSysvarAccount: INSTRUCTIONS_SYSVAR,
-      kaminoProgram: KAMINO_PROGRAM,
-    })
-    .instruction();
-
+  // Atomic exit: the program does the `withdraw_from_kamino` CPI itself when
+  // lp_vault is short of unpaid_pnl. Trader signs ONE ix, no preInstruction
+  // bundle, no dependency on a live keeper. Replaces the previous
+  // permissionless-withdraw + close pattern from PR #25 — same liveness
+  // guarantee, no spammable rebalance surface for grief.
+  //
+  // In this demo, lp_vault has cash from Phase 11 settle so the CPI won't
+  // actually fire — but the 11 Kamino accounts must still be passed (Anchor
+  // validates them at deserialization).
   const beforeCloseColl = await getAccount(connection, collateralVaultPda);
   const beforeCloseTrader = await getAccount(connection, traderUsdcAta);
   const beforeCloseTreasury = await getAccount(connection, deployerUsdcAta);
@@ -587,8 +569,18 @@ async function main() {
       owner: trader.publicKey,
       tokenProgram: TOKEN_PROGRAM_ID,
       systemProgram: SystemProgram.programId,
+      kaminoDepositAccount: kaminoDepositPda,
+      kaminoReserve: KAMINO_USDC_RESERVE,
+      kaminoLendingMarket: lendingMarket,
+      kaminoLendingMarketAuthority: lendingMarketAuthority,
+      reserveLiquidityMint: USDC_MINT,
+      reserveLiquiditySupply: reserveLiquiditySupply,
+      reserveCollateralMint: reserveCollateralMint,
+      collateralTokenProgram: TOKEN_PROGRAM_ID,
+      liquidityTokenProgram: TOKEN_PROGRAM_ID,
+      instructionSysvarAccount: INSTRUCTIONS_SYSVAR,
+      kaminoProgram: KAMINO_PROGRAM,
     })
-    .preInstructions([traderSelfRescueIx])
     .signers([trader])
     .rpc();
 
@@ -598,9 +590,9 @@ async function main() {
 
   const afterCloseLp = await getAccount(connection, lpVaultPda);
 
-  console.log(`  tx: ${tx12}  (bundled: trader-signed withdraw + close)`);
+  console.log(`  tx: ${tx12}  (single ix: close + internal Kamino redeem if needed)`);
   console.log(
-    `  lp_vault:          ${Number(beforeCloseLp.amount) / 1e6} → ${Number(afterCloseLp.amount) / 1e6} USDC  (← trader's withdraw added cash)`,
+    `  lp_vault:          ${Number(beforeCloseLp.amount) / 1e6} → ${Number(afterCloseLp.amount) / 1e6} USDC`,
   );
   console.log(
     `  collateral_vault:  ${Number(beforeCloseColl.amount) / 1e6} → ${Number(afterCloseColl.amount) / 1e6} USDC`,
@@ -613,7 +605,318 @@ async function main() {
   );
 
   // ---------------------------------------------------------------------------
-  header("Phase 13 — withdraw_from_kamino (REAL CPI: k-USDC → USDC)");
+  // Phases 13-17: claim_matured flow on a fresh short-tenor market.
+  // Forces the internal Kamino redeem CPI to actually fire by:
+  //   - draining all LP capital into Kamino (lp_vault = 0)
+  //   - waiting past tenor so settle marks the position Matured with
+  //     positive unpaid_pnl (LP owes trader; nothing in lp_vault to pay)
+  //   - claim_matured then must redeem k-USDC from Kamino in the same tx
+  // ---------------------------------------------------------------------------
+  header("Phase 13 — short-tenor market + refill deployer USDC");
+
+  const SHORT_TENOR = new anchor.BN(8);
+  const SHORT_SETTLEMENT = new anchor.BN(4);
+  const SHORT_LP_USDC = 1_000_000_000; // 1000 USDC
+  const SHORT_NOTIONAL = 100_000_000;  // 100 USDC
+  const SHORT_NONCE = 0;
+
+  // Refill deployer USDC (the original 5000 went into the main market's LP).
+  await setTokenBalance(connection, deployer.publicKey, USDC_MINT, SHORT_LP_USDC);
+
+  const [shortMarketPda] = PublicKey.findProgramAddressSync(
+    [Buffer.from("market"), KAMINO_USDC_RESERVE.toBuffer(), SHORT_TENOR.toArrayLike(Buffer, "le", 8)],
+    program.programId,
+  );
+  const [shortLpVaultPda] = PublicKey.findProgramAddressSync(
+    [Buffer.from("lp_vault"), shortMarketPda.toBuffer()],
+    program.programId,
+  );
+  const [shortCollateralVaultPda] = PublicKey.findProgramAddressSync(
+    [Buffer.from("collateral_vault"), shortMarketPda.toBuffer()],
+    program.programId,
+  );
+  const [shortLpMintPda] = PublicKey.findProgramAddressSync(
+    [Buffer.from("lp_mint"), shortMarketPda.toBuffer()],
+    program.programId,
+  );
+  const [shortKaminoDepositPda] = PublicKey.findProgramAddressSync(
+    [Buffer.from("kamino_deposit"), shortMarketPda.toBuffer()],
+    program.programId,
+  );
+  console.log(`  short_market:           ${shortMarketPda.toBase58()}`);
+  console.log(`  short_lp_vault:         ${shortLpVaultPda.toBase58()}`);
+  console.log(`  short_kamino_deposit:   ${shortKaminoDepositPda.toBase58()}`);
+
+  const shortMarketExists = await connection.getAccountInfo(shortMarketPda);
+  if (shortMarketExists) {
+    console.log(`  short market already exists (rerun)`);
+  } else {
+    const txCreate = await program.methods
+      .createMarket(SHORT_TENOR, SHORT_SETTLEMENT, MAX_UTILIZATION_BPS, BASE_SPREAD_BPS)
+      .accountsStrict({
+        protocolState: protocolStatePda,
+        market: shortMarketPda,
+        lpVault: shortLpVaultPda,
+        collateralVault: shortCollateralVaultPda,
+        lpMint: shortLpMintPda,
+        kaminoDepositAccount: shortKaminoDepositPda,
+        kaminoCollateralMint: reserveCollateralMint,
+        underlyingReserve: KAMINO_USDC_RESERVE,
+        underlyingProtocol: KAMINO_PROGRAM,
+        underlyingMint: USDC_MINT,
+        authority: deployer.publicKey,
+        systemProgram: SystemProgram.programId,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .rpc();
+    console.log(`  tx: ${txCreate}`);
+  }
+
+  // ---------------------------------------------------------------------------
+  header("Phase 14 — seed rate + deposit_lp + deposit_to_kamino (drain to 0)");
+
+  // Two oracle snapshots 8s apart so current_apy ≈ 13%. The 8s spacing is
+  // load-bearing: with elapsed < 8s, calculate_current_apy_from_index's
+  // term3 overflow path gets hit (n = SEC_PER_YEAR * PRECISION / elapsed
+  // grows past the u128 budget for the n*n_minus_1*n_minus_2 chain even
+  // when r_cubed is 0).
+  const reserveLive14 = Reserve.decode(
+    (await connection.getAccountInfo(KAMINO_USDC_RESERVE))!.data,
+  );
+  const liveBsf14Low = BigInt(
+    (reserveLive14.liquidity as any).cumulativeBorrowRateBsf.value[0].toString(),
+  );
+  const liveBsf14High = BigInt(
+    (reserveLive14.liquidity as any).cumulativeBorrowRateBsf.value[1].toString(),
+  );
+  const liveBsf14 = liveBsf14Low | (liveBsf14High << 64n);
+  // 8s elapsed, 13% APY → bump fraction = 0.13 * 8 / 31_536_000 ≈ 3.3e-8 → divisor ~30M
+  const shortSnaps: Array<[number, bigint]> = [
+    [1, liveBsf14],
+    [2, liveBsf14 + liveBsf14 / 30_000_000n],
+  ];
+  for (const [i, value] of shortSnaps) {
+    await program.methods
+      .setRateIndexOracle(new anchor.BN(value.toString()))
+      .accountsStrict({
+        protocolState: protocolStatePda,
+        market: shortMarketPda,
+        authority: deployer.publicKey,
+      })
+      .rpc();
+    if (i === 1) {
+      await new Promise((r) => setTimeout(r, 8000));
+    }
+  }
+  const m14 = await program.account.swapMarket.fetch(shortMarketPda);
+  console.log(`  rate seeded: previous=${m14.previousRateIndex.toString()} current=${m14.currentRateIndex.toString()}`);
+
+  // LP deposit
+  const [shortLpPositionPda] = PublicKey.findProgramAddressSync(
+    [Buffer.from("lp"), deployer.publicKey.toBuffer(), shortMarketPda.toBuffer()],
+    program.programId,
+  );
+  const deployerShortLpAta = await createAssociatedTokenAccountIdempotent(
+    connection,
+    deployer,
+    shortLpMintPda,
+    deployer.publicKey,
+  );
+  await program.methods
+    .depositLiquidity(new anchor.BN(SHORT_LP_USDC))
+    .accountsStrict({
+      protocolState: protocolStatePda,
+      market: shortMarketPda,
+      lpPosition: shortLpPositionPda,
+      lpVault: shortLpVaultPda,
+      lpMint: shortLpMintPda,
+      underlyingMint: USDC_MINT,
+      depositorTokenAccount: deployerUsdcAta,
+      depositorLpTokenAccount: deployerShortLpAta,
+      depositor: deployer.publicKey,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      systemProgram: SystemProgram.programId,
+    })
+    .rpc();
+
+  // Drain ALL LP capital to Kamino — lp_vault = 0 after this.
+  await program.methods
+    .depositToKamino(new anchor.BN(SHORT_LP_USDC))
+    .accountsStrict({
+      protocolState: protocolStatePda,
+      keeper: deployer.publicKey,
+      market: shortMarketPda,
+      lpVault: shortLpVaultPda,
+      kaminoDepositAccount: shortKaminoDepositPda,
+      kaminoReserve: KAMINO_USDC_RESERVE,
+      kaminoLendingMarket: lendingMarket,
+      kaminoLendingMarketAuthority: lendingMarketAuthority,
+      reserveLiquidityMint: USDC_MINT,
+      reserveLiquiditySupply: reserveLiquiditySupply,
+      reserveCollateralMint: reserveCollateralMint,
+      collateralTokenProgram: TOKEN_PROGRAM_ID,
+      liquidityTokenProgram: TOKEN_PROGRAM_ID,
+      instructionSysvarAccount: INSTRUCTIONS_SYSVAR,
+      kaminoProgram: KAMINO_PROGRAM,
+    })
+    .rpc();
+  const lp14 = await getAccount(connection, shortLpVaultPda);
+  const k14 = await getAccount(connection, shortKaminoDepositPda);
+  console.log(`  lp_vault drained:       ${Number(lp14.amount) / 1e6} USDC (target: 0)`);
+  console.log(`  kamino_deposit_account: ${Number(k14.amount) / 1e6} k-USDC`);
+
+  // ---------------------------------------------------------------------------
+  header("Phase 15 — open_swap PayFixed on short market");
+
+  const [shortSwapPositionPda] = PublicKey.findProgramAddressSync(
+    [
+      Buffer.from("swap"),
+      trader.publicKey.toBuffer(),
+      shortMarketPda.toBuffer(),
+      Buffer.from([SHORT_NONCE]),
+    ],
+    program.programId,
+  );
+
+  const tx15 = await program.methods
+    .openSwap(
+      { payFixed: {} } as any,
+      new anchor.BN(SHORT_NOTIONAL),
+      SHORT_NONCE,
+      MAX_RATE_BPS,
+      MIN_RATE_BPS,
+    )
+    .accountsStrict({
+      protocolState: protocolStatePda,
+      market: shortMarketPda,
+      swapPosition: shortSwapPositionPda,
+      collateralVault: shortCollateralVaultPda,
+      treasury: deployerUsdcAta,
+      underlyingMint: USDC_MINT,
+      traderTokenAccount: traderUsdcAta,
+      trader: trader.publicKey,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      systemProgram: SystemProgram.programId,
+    })
+    .signers([trader])
+    .rpc();
+  const shortPos = await program.account.swapPosition.fetch(shortSwapPositionPda);
+  console.log(`  tx: ${tx15}`);
+  console.log(`  fixed_rate_bps:        ${shortPos.fixedRateBps.toNumber()} (${(shortPos.fixedRateBps.toNumber() / 100).toFixed(2)}%)`);
+  console.log(`  collateral_deposited:  ${shortPos.collateralDeposited.toNumber() / 1e6} USDC`);
+  console.log(`  maturity_timestamp:    ${shortPos.maturityTimestamp.toNumber()} (${new Date(shortPos.maturityTimestamp.toNumber() * 1000).toISOString()})`);
+
+  // ---------------------------------------------------------------------------
+  header("Phase 16 — wait past maturity + bump rate + settle_period (matures)");
+
+  const nowSec16 = Math.floor(Date.now() / 1000);
+  const maturityTs = shortPos.maturityTimestamp.toNumber();
+  const wait16 = Math.max(0, maturityTs - nowSec16) + 2;
+  console.log(`  now=${nowSec16}, maturity=${maturityTs}, waiting ${wait16}s...`);
+  await new Promise((r) => setTimeout(r, wait16 * 1000));
+
+  // Big bump so variable >> fixed → PayFixed earns positive PnL → unpaid_pnl
+  // accrues against an empty lp_vault.
+  const m16Before = await program.account.swapMarket.fetch(shortMarketPda);
+  const bumpedRate =
+    BigInt(m16Before.currentRateIndex.toString()) +
+    BigInt(m16Before.currentRateIndex.toString()) / 5_000_000n;
+  await program.methods
+    .setRateIndexOracle(new anchor.BN(bumpedRate.toString()))
+    .accountsStrict({
+      protocolState: protocolStatePda,
+      market: shortMarketPda,
+      authority: deployer.publicKey,
+    })
+    .rpc();
+
+  // Settle WITHOUT preInstruction — we WANT lp_vault to stay empty so the
+  // unpaid_pnl accrues and Phase 17's claim_matured exercises the internal CPI.
+  const lpBeforeSettle = await getAccount(connection, shortLpVaultPda);
+  const tx16 = await program.methods
+    .settlePeriod()
+    .accountsStrict({
+      market: shortMarketPda,
+      swapPosition: shortSwapPositionPda,
+      lpVault: shortLpVaultPda,
+      collateralVault: shortCollateralVaultPda,
+      underlyingMint: USDC_MINT,
+      caller: deployer.publicKey,
+      tokenProgram: TOKEN_PROGRAM_ID,
+    })
+    .rpc();
+  const posAfterSettle = await program.account.swapPosition.fetch(shortSwapPositionPda);
+  const lpAfterSettle = await getAccount(connection, shortLpVaultPda);
+  console.log(`  tx: ${tx16}`);
+  console.log(`  status:               ${JSON.stringify(posAfterSettle.status)}`);
+  console.log(`  unpaid_pnl:           ${posAfterSettle.unpaidPnl.toNumber() / 1e6} USDC  (LP owes trader; lp_vault empty)`);
+  console.log(`  lp_vault:             ${Number(lpBeforeSettle.amount) / 1e6} → ${Number(lpAfterSettle.amount) / 1e6} USDC`);
+
+  if (!("matured" in (posAfterSettle.status as any))) {
+    throw new Error(`Position did not mature; status=${JSON.stringify(posAfterSettle.status)}`);
+  }
+
+  // ---------------------------------------------------------------------------
+  header("Phase 17 — claim_matured (internal Kamino redeem fires)");
+
+  // The big proof: lp_vault is empty AND unpaid_pnl > 0. Without the internal
+  // CPI, this claim would either: (a) revert with UnpaidPnlOutstanding, or
+  // (b) require a separate keeper-side withdraw_from_kamino bundled by the
+  // trader. With the new logic, the program does the redeem itself in the
+  // same tx — atomic exit, no preInstruction, no keeper dependency.
+  const traderBeforeClaim = await getAccount(connection, traderUsdcAta);
+  const collateralBeforeClaim = await getAccount(connection, shortCollateralVaultPda);
+  const lpBeforeClaim = await getAccount(connection, shortLpVaultPda);
+  const kBeforeClaim = await getAccount(connection, shortKaminoDepositPda);
+
+  const tx17 = await program.methods
+    .claimMatured()
+    .accountsStrict({
+      market: shortMarketPda,
+      swapPosition: shortSwapPositionPda,
+      lpVault: shortLpVaultPda,
+      collateralVault: shortCollateralVaultPda,
+      ownerTokenAccount: traderUsdcAta,
+      underlyingMint: USDC_MINT,
+      owner: trader.publicKey,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      kaminoDepositAccount: shortKaminoDepositPda,
+      kaminoReserve: KAMINO_USDC_RESERVE,
+      kaminoLendingMarket: lendingMarket,
+      kaminoLendingMarketAuthority: lendingMarketAuthority,
+      reserveLiquidityMint: USDC_MINT,
+      reserveLiquiditySupply: reserveLiquiditySupply,
+      reserveCollateralMint: reserveCollateralMint,
+      collateralTokenProgram: TOKEN_PROGRAM_ID,
+      liquidityTokenProgram: TOKEN_PROGRAM_ID,
+      instructionSysvarAccount: INSTRUCTIONS_SYSVAR,
+      kaminoProgram: KAMINO_PROGRAM,
+    })
+    .signers([trader])
+    .rpc();
+
+  const traderAfterClaim = await getAccount(connection, traderUsdcAta);
+  const collateralAfterClaim = await getAccount(connection, shortCollateralVaultPda);
+  const lpAfterClaim = await getAccount(connection, shortLpVaultPda);
+  const kAfterClaim = await getAccount(connection, shortKaminoDepositPda);
+
+  const kaminoDrained = Number(kBeforeClaim.amount) - Number(kAfterClaim.amount);
+  const traderReceived = Number(traderAfterClaim.amount) - Number(traderBeforeClaim.amount);
+
+  console.log(`  tx: ${tx17}`);
+  console.log(`  kamino_deposit:    ${Number(kBeforeClaim.amount) / 1e6} → ${Number(kAfterClaim.amount) / 1e6} k-USDC  (drained ${kaminoDrained / 1e6} k-USDC via internal CPI)`);
+  console.log(`  lp_vault:          ${Number(lpBeforeClaim.amount) / 1e6} → ${Number(lpAfterClaim.amount) / 1e6} USDC`);
+  console.log(`  collateral_vault:  ${Number(collateralBeforeClaim.amount) / 1e6} → ${Number(collateralAfterClaim.amount) / 1e6} USDC`);
+  console.log(`  trader USDC:       ${Number(traderBeforeClaim.amount) / 1e6} → ${Number(traderAfterClaim.amount) / 1e6}  (received ${traderReceived / 1e6} USDC)`);
+
+  if (kaminoDrained === 0) {
+    console.log(`  ⚠ Internal CPI did not fire (lp_vault had cash) — flow still valid but didn't exercise the redeem path`);
+  } else {
+    console.log(`  ✓ Internal Kamino redeem fired atomically inside claim_matured`);
+  }
+
+  // ---------------------------------------------------------------------------
+  header("Phase 18 — withdraw_from_kamino (REAL CPI: k-USDC → USDC)");
 
   // Round-trip the LP funds back: redeem all k-USDC for USDC. In production
   // this is what the keeper does when an LP wants to withdraw or when the
@@ -623,7 +926,7 @@ async function main() {
   const kAmount = kDeposit.amount;
   const beforeWithdrawLpVault = await getAccount(connection, lpVaultPda);
 
-  const tx13 = await program.methods
+  const tx18 = await program.methods
     .withdrawFromKamino(new anchor.BN(kAmount.toString()))
     .accountsStrict({
       protocolState: protocolStatePda,
@@ -646,7 +949,7 @@ async function main() {
 
   const afterKDepositW = await getAccount(connection, kaminoDepositPda);
   const afterWithdrawLpVault = await getAccount(connection, lpVaultPda);
-  console.log(`  tx: ${tx13}`);
+  console.log(`  tx: ${tx18}`);
   console.log(
     `  kamino_deposit_account: ${Number(kAmount) / 1e6} → ${Number(afterKDepositW.amount) / 1e6} k-USDC`,
   );
@@ -660,8 +963,10 @@ async function main() {
   console.log(`  Trader cycle:      open_swap → settle_period → close_position_early ✓`);
   console.log(`  JIT pattern:       100% of LP capital in Kamino, withdraw bundled as`);
   console.log(`                     preInstruction before settle (zero idle yield drag) ✓`);
-  console.log(`  Trader self-rescue: trader-signed withdraw_from_kamino bundled with close,`);
-  console.log(`                      no keeper involvement (PR #25 permissionless) ✓`);
+  console.log(`  Atomic trader exit: close_position_early + claim_matured do the Kamino`);
+  console.log(`                      redeem CPI internally on shortfall — single ix, no bundle ✓`);
+  console.log(`  Maturity flow:     short-tenor market → settle → claim_matured exercises`);
+  console.log(`                     internal redeem with empty lp_vault ✓`);
   console.log(`  Stub-oracle write: rate index seeded via set_rate_index_oracle (devnet path)`);
 }
 
