@@ -63,11 +63,19 @@ const WITHDRAWAL_FEE_BPS = 5;
 const EARLY_CLOSE_FEE_BPS = 500;
 
 const SEED_LP_USDC = 5_000_000_000; // 5000 USDC (6 dp)
-// Keeper deposits most of the LP into Kamino to earn yield, but leaves a
-// liquidity buffer in lp_vault so settle_period has cash to pay trader PnL.
-// In production this is what the keeper's rebalance loop does — never 100%
-// in Kamino.
-const KAMINO_DEPOSIT_USDC = 4_900_000_000; // 4900 USDC → Kamino (98%)
+// 100% of LP capital goes to Kamino — no idle buffer. The keeper just-in-time
+// withdraws from Kamino as a `preInstruction` before settle/close txs that
+// might need cash. Eliminates the yield drag a static buffer would cause
+// (~2% APY at 20% buffer with 10% Kamino rate). The 2-phase commit pattern
+// already enforced by `unpaid_pnl` + `UnpaidPnlOutstanding` is what makes
+// the JIT model safe — settle accrues the debt, close refuses to settle
+// until the keeper has refilled lp_vault.
+const KAMINO_DEPOSIT_USDC = SEED_LP_USDC;
+// Pre-settle JIT withdraw: keeper redeems a small amount of k-USDC for USDC
+// before each settle/close, ensuring lp_vault has cash for any direction of
+// PnL. Sized as a ceiling on the worst-case PnL per period (notional × rate
+// move cap of 5% × elapsed/year), safely overshooting for the demo.
+const JIT_WITHDRAW_K_USDC = 10_000_000; // 10 k-USDC (~12 USDC)
 const TRADER_USDC = 1_000_000_000; // 1000 USDC for the trader's balance
 const NOTIONAL_USDC = 1_000_000_000; // 1000 USDC notional swap
 const TRADER_NONCE = 0;
@@ -474,7 +482,32 @@ async function main() {
   console.log(`  current_rate_index:  ${m10.currentRateIndex.toString()}`);
 
   // ---------------------------------------------------------------------------
-  header("Phase 11 — settle_period (permissionless, deployer calls)");
+  header("Phase 11 — settle_period (with JIT Kamino withdraw preInstruction)");
+
+  // Just-in-time pattern: keeper bundles `withdraw_from_kamino` as a
+  // preInstruction so lp_vault has cash to pay any direction of PnL the
+  // settle_period below resolves. Both instructions are atomic — if either
+  // fails the entire tx reverts.
+  const jitWithdrawIx = await program.methods
+    .withdrawFromKamino(new anchor.BN(JIT_WITHDRAW_K_USDC))
+    .accountsStrict({
+      protocolState: protocolStatePda,
+      keeper: deployer.publicKey,
+      market: marketPda,
+      lpVault: lpVaultPda,
+      kaminoDepositAccount: kaminoDepositPda,
+      kaminoReserve: KAMINO_USDC_RESERVE,
+      kaminoLendingMarket: lendingMarket,
+      kaminoLendingMarketAuthority: lendingMarketAuthority,
+      reserveLiquidityMint: USDC_MINT,
+      reserveLiquiditySupply: reserveLiquiditySupply,
+      reserveCollateralMint: reserveCollateralMint,
+      collateralTokenProgram: TOKEN_PROGRAM_ID,
+      liquidityTokenProgram: TOKEN_PROGRAM_ID,
+      instructionSysvarAccount: INSTRUCTIONS_SYSVAR,
+      kaminoProgram: KAMINO_PROGRAM,
+    })
+    .instruction();
 
   const beforeSettleColl = await getAccount(connection, collateralVaultPda);
   const beforeSettleLp = await getAccount(connection, lpVaultPda);
@@ -489,6 +522,7 @@ async function main() {
       caller: deployer.publicKey,
       tokenProgram: TOKEN_PROGRAM_ID,
     })
+    .preInstructions([jitWithdrawIx])
     .rpc();
   const afterSettleColl = await getAccount(connection, collateralVaultPda);
   const afterSettleLp = await getAccount(connection, lpVaultPda);
@@ -590,6 +624,8 @@ async function main() {
   console.log(`  Real Kamino CPI:   deposit_to_kamino + withdraw_from_kamino ✓`);
   console.log(`  Real Kamino read:  cumulative_borrow_rate_bsf decoded from live Reserve ✓`);
   console.log(`  Trader cycle:      open_swap → settle_period → close_position_early ✓`);
+  console.log(`  JIT pattern:       100% of LP capital in Kamino, withdraw bundled as`);
+  console.log(`                     preInstruction before settle (zero idle yield drag) ✓`);
   console.log(`  Stub-oracle write: rate index seeded via set_rate_index_oracle (devnet path)`);
 }
 
