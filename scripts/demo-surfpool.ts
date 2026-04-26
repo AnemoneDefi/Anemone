@@ -339,7 +339,7 @@ async function main() {
     .depositToKamino(new anchor.BN(KAMINO_DEPOSIT_USDC))
     .accountsStrict({
       protocolState: protocolStatePda,
-      keeper: deployer.publicKey, // deployer is the default keeper after init
+      keeper: deployer.publicKey, // deposit stays keeper-only
       market: marketPda,
       lpVault: lpVaultPda,
       kaminoDepositAccount: kaminoDepositPda,
@@ -492,7 +492,7 @@ async function main() {
     .withdrawFromKamino(new anchor.BN(JIT_WITHDRAW_K_USDC))
     .accountsStrict({
       protocolState: protocolStatePda,
-      keeper: deployer.publicKey,
+      caller: deployer.publicKey,
       market: marketPda,
       lpVault: lpVaultPda,
       kaminoDepositAccount: kaminoDepositPda,
@@ -593,7 +593,7 @@ async function main() {
     .withdrawFromKamino(new anchor.BN(kAmount.toString()))
     .accountsStrict({
       protocolState: protocolStatePda,
-      keeper: deployer.publicKey,
+      caller: deployer.publicKey,
       market: marketPda,
       lpVault: lpVaultPda,
       kaminoDepositAccount: kaminoDepositPda,
