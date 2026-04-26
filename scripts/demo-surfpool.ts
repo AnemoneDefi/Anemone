@@ -63,11 +63,19 @@ const WITHDRAWAL_FEE_BPS = 5;
 const EARLY_CLOSE_FEE_BPS = 500;
 
 const SEED_LP_USDC = 5_000_000_000; // 5000 USDC (6 dp)
-// Keeper deposits most of the LP into Kamino to earn yield, but leaves a
-// liquidity buffer in lp_vault so settle_period has cash to pay trader PnL.
-// In production this is what the keeper's rebalance loop does — never 100%
-// in Kamino.
-const KAMINO_DEPOSIT_USDC = 4_900_000_000; // 4900 USDC → Kamino (98%)
+// 100% of LP capital goes to Kamino — no idle buffer. The keeper just-in-time
+// withdraws from Kamino as a `preInstruction` before settle/close txs that
+// might need cash. Eliminates the yield drag a static buffer would cause
+// (~2% APY at 20% buffer with 10% Kamino rate). The 2-phase commit pattern
+// already enforced by `unpaid_pnl` + `UnpaidPnlOutstanding` is what makes
+// the JIT model safe — settle accrues the debt, close refuses to settle
+// until the keeper has refilled lp_vault.
+const KAMINO_DEPOSIT_USDC = SEED_LP_USDC;
+// Pre-settle JIT withdraw: keeper redeems a small amount of k-USDC for USDC
+// before each settle/close, ensuring lp_vault has cash for any direction of
+// PnL. Sized as a ceiling on the worst-case PnL per period (notional × rate
+// move cap of 5% × elapsed/year), safely overshooting for the demo.
+const JIT_WITHDRAW_K_USDC = 10_000_000; // 10 k-USDC (~12 USDC)
 const TRADER_USDC = 1_000_000_000; // 1000 USDC for the trader's balance
 const NOTIONAL_USDC = 1_000_000_000; // 1000 USDC notional swap
 const TRADER_NONCE = 0;
@@ -331,7 +339,7 @@ async function main() {
     .depositToKamino(new anchor.BN(KAMINO_DEPOSIT_USDC))
     .accountsStrict({
       protocolState: protocolStatePda,
-      keeper: deployer.publicKey, // deployer is the default keeper after init
+      keeper: deployer.publicKey, // deposit stays keeper-only
       market: marketPda,
       lpVault: lpVaultPda,
       kaminoDepositAccount: kaminoDepositPda,
@@ -474,7 +482,32 @@ async function main() {
   console.log(`  current_rate_index:  ${m10.currentRateIndex.toString()}`);
 
   // ---------------------------------------------------------------------------
-  header("Phase 11 — settle_period (permissionless, deployer calls)");
+  header("Phase 11 — settle_period (with JIT Kamino withdraw preInstruction)");
+
+  // Just-in-time pattern: keeper bundles `withdraw_from_kamino` as a
+  // preInstruction so lp_vault has cash to pay any direction of PnL the
+  // settle_period below resolves. Both instructions are atomic — if either
+  // fails the entire tx reverts.
+  const jitWithdrawIx = await program.methods
+    .withdrawFromKamino(new anchor.BN(JIT_WITHDRAW_K_USDC))
+    .accountsStrict({
+      protocolState: protocolStatePda,
+      caller: deployer.publicKey,
+      market: marketPda,
+      lpVault: lpVaultPda,
+      kaminoDepositAccount: kaminoDepositPda,
+      kaminoReserve: KAMINO_USDC_RESERVE,
+      kaminoLendingMarket: lendingMarket,
+      kaminoLendingMarketAuthority: lendingMarketAuthority,
+      reserveLiquidityMint: USDC_MINT,
+      reserveLiquiditySupply: reserveLiquiditySupply,
+      reserveCollateralMint: reserveCollateralMint,
+      collateralTokenProgram: TOKEN_PROGRAM_ID,
+      liquidityTokenProgram: TOKEN_PROGRAM_ID,
+      instructionSysvarAccount: INSTRUCTIONS_SYSVAR,
+      kaminoProgram: KAMINO_PROGRAM,
+    })
+    .instruction();
 
   const beforeSettleColl = await getAccount(connection, collateralVaultPda);
   const beforeSettleLp = await getAccount(connection, lpVaultPda);
@@ -489,6 +522,7 @@ async function main() {
       caller: deployer.publicKey,
       tokenProgram: TOKEN_PROGRAM_ID,
     })
+    .preInstructions([jitWithdrawIx])
     .rpc();
   const afterSettleColl = await getAccount(connection, collateralVaultPda);
   const afterSettleLp = await getAccount(connection, lpVaultPda);
@@ -505,11 +539,39 @@ async function main() {
   console.log(`  collateral_remaining: ${positionAfterSettle.collateralRemaining.toNumber() / 1e6} USDC`);
 
   // ---------------------------------------------------------------------------
-  header("Phase 12 — close_position_early (trader exits, pays 5% early-close fee)");
+  header("Phase 12 — close_position_early bundled with trader-signed Kamino withdraw");
+
+  // Trader self-rescue: bundles `withdraw_from_kamino` as a preInstruction
+  // signed by the trader (NOT the keeper). Proves that after PR #25's
+  // permissionless change, traders can exit without depending on a live
+  // keeper. lp_vault doesn't actually need this top-up here (Phase 11 left
+  // ~11.78 USDC in it), but we run it to exercise the production pattern
+  // — and it stresses that the `caller` signer = trader works on-chain.
+  const traderSelfRescueIx = await program.methods
+    .withdrawFromKamino(new anchor.BN(JIT_WITHDRAW_K_USDC))
+    .accountsStrict({
+      protocolState: protocolStatePda,
+      caller: trader.publicKey,
+      market: marketPda,
+      lpVault: lpVaultPda,
+      kaminoDepositAccount: kaminoDepositPda,
+      kaminoReserve: KAMINO_USDC_RESERVE,
+      kaminoLendingMarket: lendingMarket,
+      kaminoLendingMarketAuthority: lendingMarketAuthority,
+      reserveLiquidityMint: USDC_MINT,
+      reserveLiquiditySupply: reserveLiquiditySupply,
+      reserveCollateralMint: reserveCollateralMint,
+      collateralTokenProgram: TOKEN_PROGRAM_ID,
+      liquidityTokenProgram: TOKEN_PROGRAM_ID,
+      instructionSysvarAccount: INSTRUCTIONS_SYSVAR,
+      kaminoProgram: KAMINO_PROGRAM,
+    })
+    .instruction();
 
   const beforeCloseColl = await getAccount(connection, collateralVaultPda);
   const beforeCloseTrader = await getAccount(connection, traderUsdcAta);
   const beforeCloseTreasury = await getAccount(connection, deployerUsdcAta);
+  const beforeCloseLp = await getAccount(connection, lpVaultPda);
 
   const tx12 = await program.methods
     .closePositionEarly()
@@ -526,6 +588,7 @@ async function main() {
       tokenProgram: TOKEN_PROGRAM_ID,
       systemProgram: SystemProgram.programId,
     })
+    .preInstructions([traderSelfRescueIx])
     .signers([trader])
     .rpc();
 
@@ -533,7 +596,12 @@ async function main() {
   const afterCloseTrader = await getAccount(connection, traderUsdcAta);
   const afterCloseTreasury = await getAccount(connection, deployerUsdcAta);
 
-  console.log(`  tx: ${tx12}`);
+  const afterCloseLp = await getAccount(connection, lpVaultPda);
+
+  console.log(`  tx: ${tx12}  (bundled: trader-signed withdraw + close)`);
+  console.log(
+    `  lp_vault:          ${Number(beforeCloseLp.amount) / 1e6} → ${Number(afterCloseLp.amount) / 1e6} USDC  (← trader's withdraw added cash)`,
+  );
   console.log(
     `  collateral_vault:  ${Number(beforeCloseColl.amount) / 1e6} → ${Number(afterCloseColl.amount) / 1e6} USDC`,
   );
@@ -559,7 +627,7 @@ async function main() {
     .withdrawFromKamino(new anchor.BN(kAmount.toString()))
     .accountsStrict({
       protocolState: protocolStatePda,
-      keeper: deployer.publicKey,
+      caller: deployer.publicKey,
       market: marketPda,
       lpVault: lpVaultPda,
       kaminoDepositAccount: kaminoDepositPda,
@@ -590,6 +658,10 @@ async function main() {
   console.log(`  Real Kamino CPI:   deposit_to_kamino + withdraw_from_kamino ✓`);
   console.log(`  Real Kamino read:  cumulative_borrow_rate_bsf decoded from live Reserve ✓`);
   console.log(`  Trader cycle:      open_swap → settle_period → close_position_early ✓`);
+  console.log(`  JIT pattern:       100% of LP capital in Kamino, withdraw bundled as`);
+  console.log(`                     preInstruction before settle (zero idle yield drag) ✓`);
+  console.log(`  Trader self-rescue: trader-signed withdraw_from_kamino bundled with close,`);
+  console.log(`                      no keeper involvement (PR #25 permissionless) ✓`);
   console.log(`  Stub-oracle write: rate index seeded via set_rate_index_oracle (devnet path)`);
 }
 

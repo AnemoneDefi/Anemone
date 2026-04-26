@@ -2823,6 +2823,59 @@ describe("anemone", () => {
         .rpc();
     });
 
+    it("allows any signer to call withdraw_from_kamino (permissionless, no InvalidAuthority)", async () => {
+      // Why permissionless: traders bundling close_position_early /
+      // claim_matured need to refill lp_vault to clear unpaid_pnl. Without
+      // this, the trader is held hostage to keeper liveness — keeper dies,
+      // position can never close. The destination of withdraw is the
+      // protocol's own lp_vault PDA, so no caller can profit from gratuitous
+      // calls (they just pay their own gas).
+      const INSTRUCTIONS_SYSVAR = new PublicKey("Sysvar1nstructions1111111111111111111111111");
+      const randomCaller = Keypair.generate();
+
+      // Fund the random caller with SOL so they can sign + pay gas.
+      const sig = await provider.connection.requestAirdrop(
+        randomCaller.publicKey,
+        1_000_000_000,
+      );
+      await provider.connection.confirmTransaction(sig, "confirmed");
+
+      try {
+        await program.methods
+          .withdrawFromKamino(new anchor.BN(1_000))
+          .accountsStrict({
+            protocolState: protocolStatePda,
+            caller: randomCaller.publicKey, // NOT the keeper — must succeed past auth
+            market: marketPda,
+            lpVault: lpVaultPda,
+            kaminoDepositAccount: kaminoDepositPda,
+            kaminoReserve: Keypair.generate().publicKey,
+            kaminoLendingMarket: Keypair.generate().publicKey,
+            kaminoLendingMarketAuthority: Keypair.generate().publicKey,
+            reserveLiquidityMint: underlyingMint.publicKey,
+            reserveLiquiditySupply: Keypair.generate().publicKey,
+            reserveCollateralMint: fakeKaminoCollateralMint.publicKey,
+            collateralTokenProgram: TOKEN_PROGRAM_ID,
+            liquidityTokenProgram: TOKEN_PROGRAM_ID,
+            instructionSysvarAccount: INSTRUCTIONS_SYSVAR,
+            kaminoProgram: underlyingProtocol.publicKey,
+          })
+          .signers([randomCaller])
+          .rpc();
+        // Either path is acceptable: it might somehow succeed (unlikely with
+        // dummy Kamino accounts) or fail at the CPI. What it MUST NOT do is
+        // fail with InvalidAuthority — that would mean the constraint is
+        // still there.
+      } catch (err: any) {
+        assert.notInclude(
+          err.toString(),
+          "InvalidAuthority",
+          "withdraw_from_kamino should NOT enforce keeper authority",
+        );
+        console.log("withdraw_from_kamino is permissionless (failed past auth at CPI) ✓");
+      }
+    });
+
     it("keeper job-style memcmp filter returns only Open positions", async () => {
       // This mirrors exactly what keeper/src/jobs/settlement.ts does — proves
       // the offset and filter are correct. If this fails, the keeper's
