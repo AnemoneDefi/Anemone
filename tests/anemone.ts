@@ -1402,6 +1402,7 @@ describe("anemone", () => {
     let claimLpVaultPda: PublicKey;
     let claimCollateralVaultPda: PublicKey;
     let claimSwapPositionPda: PublicKey;
+    let claimKaminoDepositPda: PublicKey;
 
     before(async () => {
       [claimMarketPda] = PublicKey.findProgramAddressSync(
@@ -1432,6 +1433,11 @@ describe("anemone", () => {
         ],
         program.programId
       );
+
+      [claimKaminoDepositPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("kamino_deposit"), claimMarketPda.toBuffer()],
+        program.programId
+      );
     });
 
     it("rejects claim on non-matured position", async () => {
@@ -1457,6 +1463,17 @@ describe("anemone", () => {
             underlyingMint: underlyingMint.publicKey,
             owner: authority.publicKey,
             tokenProgram: TOKEN_PROGRAM_ID,
+            kaminoDepositAccount: claimKaminoDepositPda,
+            kaminoReserve: KAMINO_USDC_RESERVE,
+            kaminoLendingMarket: KAMINO_PROGRAM_ID,
+            kaminoLendingMarketAuthority: KAMINO_PROGRAM_ID,
+            reserveLiquidityMint: underlyingMint.publicKey,
+            reserveLiquiditySupply: claimLpVaultPda,
+            reserveCollateralMint: claimCollateralVaultPda,
+            collateralTokenProgram: TOKEN_PROGRAM_ID,
+            liquidityTokenProgram: TOKEN_PROGRAM_ID,
+            instructionSysvarAccount: new PublicKey("Sysvar1nstructions1111111111111111111111111"),
+            kaminoProgram: KAMINO_PROGRAM_ID,
           })
           .rpc();
         assert.fail("Should have rejected — position not matured");
@@ -1499,6 +1516,17 @@ describe("anemone", () => {
             underlyingMint: underlyingMint.publicKey,
             owner: fakeOwner.publicKey,
             tokenProgram: TOKEN_PROGRAM_ID,
+            kaminoDepositAccount: claimKaminoDepositPda,
+            kaminoReserve: KAMINO_USDC_RESERVE,
+            kaminoLendingMarket: KAMINO_PROGRAM_ID,
+            kaminoLendingMarketAuthority: KAMINO_PROGRAM_ID,
+            reserveLiquidityMint: underlyingMint.publicKey,
+            reserveLiquiditySupply: claimLpVaultPda,
+            reserveCollateralMint: claimCollateralVaultPda,
+            collateralTokenProgram: TOKEN_PROGRAM_ID,
+            liquidityTokenProgram: TOKEN_PROGRAM_ID,
+            instructionSysvarAccount: new PublicKey("Sysvar1nstructions1111111111111111111111111"),
+            kaminoProgram: KAMINO_PROGRAM_ID,
           })
           .signers([fakeOwner])
           .rpc();
@@ -1794,6 +1822,17 @@ describe("anemone", () => {
           underlyingMint: underlyingMint.publicKey,
           owner: authority.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
+          kaminoDepositAccount: shortKaminoDepositPda,
+          kaminoReserve: KAMINO_USDC_RESERVE,
+          kaminoLendingMarket: KAMINO_PROGRAM_ID,
+          kaminoLendingMarketAuthority: KAMINO_PROGRAM_ID,
+          reserveLiquidityMint: underlyingMint.publicKey,
+          reserveLiquiditySupply: shortLpVaultPda,
+          reserveCollateralMint: shortCollateralVaultPda,
+          collateralTokenProgram: TOKEN_PROGRAM_ID,
+          liquidityTokenProgram: TOKEN_PROGRAM_ID,
+          instructionSysvarAccount: new PublicKey("Sysvar1nstructions1111111111111111111111111"),
+          kaminoProgram: KAMINO_PROGRAM_ID,
         })
         .rpc();
 
@@ -2166,6 +2205,7 @@ describe("anemone", () => {
     let addCollateralVaultPda: PublicKey;
     let addLpVaultPda: PublicKey;
     let addSwapPositionPda: PublicKey;
+    let addKaminoDepositPda: PublicKey;
 
     before(async () => {
       [addMarketPda] = PublicKey.findProgramAddressSync(
@@ -2191,6 +2231,10 @@ describe("anemone", () => {
           addMarketPda.toBuffer(),
           Buffer.from([0]),
         ],
+        program.programId
+      );
+      [addKaminoDepositPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("kamino_deposit"), addMarketPda.toBuffer()],
         program.programId
       );
     });
@@ -2289,6 +2333,17 @@ describe("anemone", () => {
             owner: fake.publicKey,
             tokenProgram: TOKEN_PROGRAM_ID,
             systemProgram: SystemProgram.programId,
+            kaminoDepositAccount: addKaminoDepositPda,
+            kaminoReserve: KAMINO_USDC_RESERVE,
+            kaminoLendingMarket: KAMINO_PROGRAM_ID,
+            kaminoLendingMarketAuthority: KAMINO_PROGRAM_ID,
+            reserveLiquidityMint: underlyingMint.publicKey,
+            reserveLiquiditySupply: addLpVaultPda,
+            reserveCollateralMint: addCollateralVaultPda,
+            collateralTokenProgram: TOKEN_PROGRAM_ID,
+            liquidityTokenProgram: TOKEN_PROGRAM_ID,
+            instructionSysvarAccount: new PublicKey("Sysvar1nstructions1111111111111111111111111"),
+            kaminoProgram: KAMINO_PROGRAM_ID,
           })
           .signers([fake])
           .rpc();
@@ -2541,6 +2596,17 @@ describe("anemone", () => {
           owner: authority.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
+          kaminoDepositAccount: earlyKaminoDepositPda,
+          kaminoReserve: KAMINO_USDC_RESERVE,
+          kaminoLendingMarket: KAMINO_PROGRAM_ID,
+          kaminoLendingMarketAuthority: KAMINO_PROGRAM_ID,
+          reserveLiquidityMint: underlyingMint.publicKey,
+          reserveLiquiditySupply: earlyLpVaultPda,
+          reserveCollateralMint: earlyCollateralVaultPda,
+          collateralTokenProgram: TOKEN_PROGRAM_ID,
+          liquidityTokenProgram: TOKEN_PROGRAM_ID,
+          instructionSysvarAccount: new PublicKey("Sysvar1nstructions1111111111111111111111111"),
+          kaminoProgram: KAMINO_PROGRAM_ID,
         })
         .rpc();
 

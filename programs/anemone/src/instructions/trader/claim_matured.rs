@@ -5,6 +5,7 @@ use anchor_spl::token_interface::{
 };
 use crate::state::{SwapMarket, SwapPosition, SwapDirection, PositionStatus};
 use crate::errors::AnemoneError;
+use crate::helpers::cpi_withdraw_from_kamino;
 
 #[derive(Accounts)]
 pub struct ClaimMatured<'info> {
@@ -58,6 +59,57 @@ pub struct ClaimMatured<'info> {
     pub owner: Signer<'info>,
 
     pub token_program: Interface<'info, TokenInterface>,
+
+    // ----- Kamino accounts for internal redeem-on-shortfall -----
+    //
+    // claim_matured does an internal `withdraw_from_kamino` CPI when the LP
+    // owes the trader unpaid PnL but the lp_vault is short. This avoids
+    // forcing the trader to bundle a separate `withdraw_from_kamino` ix
+    // (which is permissionless but spammable — see PR #25 grief vector).
+    //
+    // All Kamino accounts must be passed at every claim_matured call. The
+    // CPI only fires when shortfall > 0; if lp_vault already has enough
+    // cash, these accounts are read-only inputs that go untouched.
+
+    #[account(
+        mut,
+        address = market.kamino_deposit_account @ AnemoneError::InvalidVault,
+    )]
+    pub kamino_deposit_account: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    /// CHECK: Validated by Kamino program during CPI
+    #[account(mut)]
+    pub kamino_reserve: AccountInfo<'info>,
+
+    /// CHECK: Validated by Kamino program during CPI
+    pub kamino_lending_market: AccountInfo<'info>,
+
+    /// CHECK: Validated by Kamino program during CPI
+    pub kamino_lending_market_authority: AccountInfo<'info>,
+
+    /// CHECK: Validated by Kamino program during CPI; must match underlying_mint
+    pub reserve_liquidity_mint: Box<InterfaceAccount<'info, Mint>>,
+
+    /// CHECK: Validated by Kamino program during CPI
+    #[account(mut)]
+    pub reserve_liquidity_supply: AccountInfo<'info>,
+
+    /// CHECK: Validated by Kamino program during CPI
+    #[account(mut)]
+    pub reserve_collateral_mint: AccountInfo<'info>,
+
+    pub collateral_token_program: Interface<'info, TokenInterface>,
+
+    pub liquidity_token_program: Interface<'info, TokenInterface>,
+
+    /// CHECK: Fixed address validated by Kamino
+    pub instruction_sysvar_account: AccountInfo<'info>,
+
+    /// CHECK: Validated against market.underlying_protocol below
+    #[account(
+        constraint = kamino_program.key() == market.underlying_protocol @ AnemoneError::InvalidReserve,
+    )]
+    pub kamino_program: AccountInfo<'info>,
 }
 
 pub fn handle_claim_matured(ctx: Context<ClaimMatured>) -> Result<()> {
@@ -77,10 +129,51 @@ pub fn handle_claim_matured(ctx: Context<ClaimMatured>) -> Result<()> {
         &[bump],
     ]];
 
+    // Internal Kamino redeem on shortfall — fixes the grief vector that
+    // PR #25's permissionless `withdraw_from_kamino` opened. If LP owes
+    // the trader unpaid PnL and the lp_vault doesn't have enough cash,
+    // redeem just enough k-USDC from Kamino to cover the catchup IN THIS
+    // SAME TX. Trader gets atomic exit — no bundling, no waiting on the
+    // keeper, no externally-callable rebalance surface for attackers to
+    // grief.
+    //
+    // Amount logic: k-USDC redeems for >= 1.0 USDC per unit (Kamino's
+    // `collateral_to_liquidity_exchange_rate` is monotonic for stablecoin
+    // reserves), so requesting `shortfall` k-USDC always yields >=
+    // `shortfall` USDC. The excess (if any) stays in lp_vault as a small
+    // unintended buffer that the keeper rebalances on its next cycle.
+    if position.unpaid_pnl > 0 {
+        let needed = position.unpaid_pnl as u64;
+        let lp_vault_balance = ctx.accounts.lp_vault.amount;
+        if needed > lp_vault_balance {
+            let shortfall_k = needed.saturating_sub(lp_vault_balance);
+            cpi_withdraw_from_kamino(
+                &ctx.accounts.kamino_program,
+                &ctx.accounts.market.to_account_info(),
+                signer_seeds,
+                &ctx.accounts.kamino_reserve,
+                &ctx.accounts.kamino_lending_market,
+                &ctx.accounts.kamino_lending_market_authority,
+                &ctx.accounts.reserve_liquidity_mint.to_account_info(),
+                &ctx.accounts.reserve_liquidity_supply,
+                &ctx.accounts.reserve_collateral_mint,
+                &ctx.accounts.kamino_deposit_account.to_account_info(),
+                &ctx.accounts.lp_vault.to_account_info(),
+                &ctx.accounts.collateral_token_program.to_account_info(),
+                &ctx.accounts.liquidity_token_program.to_account_info(),
+                &ctx.accounts.instruction_sysvar_account,
+                shortfall_k,
+            )?;
+            // Refresh balance after CPI so the catchup below sees the new state.
+            ctx.accounts.lp_vault.reload()?;
+            ctx.accounts.kamino_deposit_account.reload()?;
+        }
+    }
+
     // H1 catchup: after maturity, settle_period no longer runs (status is
     // Matured, not Open), so any unpaid_pnl from the final settle can only
-    // be paid here. If the lp_vault is still short, the claim reverts with
-    // UnpaidPnlOutstanding — trader waits for the keeper to refill.
+    // be paid here. With the internal Kamino redeem above, lp_vault now
+    // has enough cash unless Kamino itself is insolvent.
     let catchup_amount: u64 = if position.unpaid_pnl > 0 && ctx.accounts.lp_vault.amount > 0 {
         let amount = (position.unpaid_pnl as u64).min(ctx.accounts.lp_vault.amount);
         if amount > 0 {
@@ -132,12 +225,16 @@ pub fn handle_claim_matured(ctx: Context<ClaimMatured>) -> Result<()> {
     }
 
     // Update market totals + lp_nav for the catchup drain.
+    // Also mirror any internal Kamino redeem that happened above into
+    // market.total_kamino_collateral so subsequent reads see the truth.
+    let kamino_balance_now = ctx.accounts.kamino_deposit_account.amount;
     let market = &mut ctx.accounts.market;
     if catchup_amount > 0 {
         market.lp_nav = market.lp_nav
             .checked_sub(catchup_amount)
             .ok_or(AnemoneError::MathOverflow)?;
     }
+    market.total_kamino_collateral = kamino_balance_now;
     match direction {
         SwapDirection::PayFixed => {
             market.total_fixed_notional = market.total_fixed_notional
