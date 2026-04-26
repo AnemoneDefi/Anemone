@@ -788,6 +788,17 @@ describe("anemone", () => {
             treasury: treasury.publicKey,
             withdrawer: authority.publicKey,
             tokenProgram: TOKEN_PROGRAM_ID,
+            kaminoDepositAccount: kaminoDepositPda,
+            kaminoReserve: KAMINO_USDC_RESERVE,
+            kaminoLendingMarket: KAMINO_PROGRAM_ID,
+            kaminoLendingMarketAuthority: KAMINO_PROGRAM_ID,
+            reserveLiquidityMint: underlyingMint.publicKey,
+            reserveLiquiditySupply: lpVaultPda,
+            reserveCollateralMint: collateralVaultPda,
+            collateralTokenProgram: TOKEN_PROGRAM_ID,
+            liquidityTokenProgram: TOKEN_PROGRAM_ID,
+            instructionSysvarAccount: new PublicKey("Sysvar1nstructions1111111111111111111111111"),
+            kaminoProgram: underlyingProtocol.publicKey,
           })
           .rpc();
         assert.fail("Should have rejected — no pending withdrawal");
@@ -1582,6 +1593,17 @@ describe("anemone", () => {
             underlyingMint: underlyingMint.publicKey,
             liquidator: liquidator.publicKey,
             tokenProgram: TOKEN_PROGRAM_ID,
+            kaminoDepositAccount: claimKaminoDepositPda,
+            kaminoReserve: KAMINO_USDC_RESERVE,
+            kaminoLendingMarket: KAMINO_PROGRAM_ID,
+            kaminoLendingMarketAuthority: KAMINO_PROGRAM_ID,
+            reserveLiquidityMint: underlyingMint.publicKey,
+            reserveLiquiditySupply: claimLpVaultPda,
+            reserveCollateralMint: claimCollateralVaultPda,
+            collateralTokenProgram: TOKEN_PROGRAM_ID,
+            liquidityTokenProgram: TOKEN_PROGRAM_ID,
+            instructionSysvarAccount: new PublicKey("Sysvar1nstructions1111111111111111111111111"),
+            kaminoProgram: KAMINO_PROGRAM_ID,
           })
           .signers([liquidator])
           .rpc();
@@ -2150,6 +2172,17 @@ describe("anemone", () => {
             underlyingMint: underlyingMint.publicKey,
             liquidator: liquidator.publicKey,
             tokenProgram: TOKEN_PROGRAM_ID,
+            kaminoDepositAccount: liqKaminoDepositPda,
+            kaminoReserve: KAMINO_USDC_RESERVE,
+            kaminoLendingMarket: KAMINO_PROGRAM_ID,
+            kaminoLendingMarketAuthority: KAMINO_PROGRAM_ID,
+            reserveLiquidityMint: underlyingMint.publicKey,
+            reserveLiquiditySupply: liqLpVaultPda,
+            reserveCollateralMint: liqCollateralVaultPda,
+            collateralTokenProgram: TOKEN_PROGRAM_ID,
+            liquidityTokenProgram: TOKEN_PROGRAM_ID,
+            instructionSysvarAccount: new PublicKey("Sysvar1nstructions1111111111111111111111111"),
+            kaminoProgram: KAMINO_PROGRAM_ID,
           })
           .signers([liquidator])
           .rpc();
