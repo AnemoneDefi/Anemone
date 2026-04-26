@@ -539,11 +539,39 @@ async function main() {
   console.log(`  collateral_remaining: ${positionAfterSettle.collateralRemaining.toNumber() / 1e6} USDC`);
 
   // ---------------------------------------------------------------------------
-  header("Phase 12 — close_position_early (trader exits, pays 5% early-close fee)");
+  header("Phase 12 — close_position_early bundled with trader-signed Kamino withdraw");
+
+  // Trader self-rescue: bundles `withdraw_from_kamino` as a preInstruction
+  // signed by the trader (NOT the keeper). Proves that after PR #25's
+  // permissionless change, traders can exit without depending on a live
+  // keeper. lp_vault doesn't actually need this top-up here (Phase 11 left
+  // ~11.78 USDC in it), but we run it to exercise the production pattern
+  // — and it stresses that the `caller` signer = trader works on-chain.
+  const traderSelfRescueIx = await program.methods
+    .withdrawFromKamino(new anchor.BN(JIT_WITHDRAW_K_USDC))
+    .accountsStrict({
+      protocolState: protocolStatePda,
+      caller: trader.publicKey,
+      market: marketPda,
+      lpVault: lpVaultPda,
+      kaminoDepositAccount: kaminoDepositPda,
+      kaminoReserve: KAMINO_USDC_RESERVE,
+      kaminoLendingMarket: lendingMarket,
+      kaminoLendingMarketAuthority: lendingMarketAuthority,
+      reserveLiquidityMint: USDC_MINT,
+      reserveLiquiditySupply: reserveLiquiditySupply,
+      reserveCollateralMint: reserveCollateralMint,
+      collateralTokenProgram: TOKEN_PROGRAM_ID,
+      liquidityTokenProgram: TOKEN_PROGRAM_ID,
+      instructionSysvarAccount: INSTRUCTIONS_SYSVAR,
+      kaminoProgram: KAMINO_PROGRAM,
+    })
+    .instruction();
 
   const beforeCloseColl = await getAccount(connection, collateralVaultPda);
   const beforeCloseTrader = await getAccount(connection, traderUsdcAta);
   const beforeCloseTreasury = await getAccount(connection, deployerUsdcAta);
+  const beforeCloseLp = await getAccount(connection, lpVaultPda);
 
   const tx12 = await program.methods
     .closePositionEarly()
@@ -560,6 +588,7 @@ async function main() {
       tokenProgram: TOKEN_PROGRAM_ID,
       systemProgram: SystemProgram.programId,
     })
+    .preInstructions([traderSelfRescueIx])
     .signers([trader])
     .rpc();
 
@@ -567,7 +596,12 @@ async function main() {
   const afterCloseTrader = await getAccount(connection, traderUsdcAta);
   const afterCloseTreasury = await getAccount(connection, deployerUsdcAta);
 
-  console.log(`  tx: ${tx12}`);
+  const afterCloseLp = await getAccount(connection, lpVaultPda);
+
+  console.log(`  tx: ${tx12}  (bundled: trader-signed withdraw + close)`);
+  console.log(
+    `  lp_vault:          ${Number(beforeCloseLp.amount) / 1e6} → ${Number(afterCloseLp.amount) / 1e6} USDC  (← trader's withdraw added cash)`,
+  );
   console.log(
     `  collateral_vault:  ${Number(beforeCloseColl.amount) / 1e6} → ${Number(afterCloseColl.amount) / 1e6} USDC`,
   );
@@ -626,6 +660,8 @@ async function main() {
   console.log(`  Trader cycle:      open_swap → settle_period → close_position_early ✓`);
   console.log(`  JIT pattern:       100% of LP capital in Kamino, withdraw bundled as`);
   console.log(`                     preInstruction before settle (zero idle yield drag) ✓`);
+  console.log(`  Trader self-rescue: trader-signed withdraw_from_kamino bundled with close,`);
+  console.log(`                      no keeper involvement (PR #25 permissionless) ✓`);
   console.log(`  Stub-oracle write: rate index seeded via set_rate_index_oracle (devnet path)`);
 }
 
