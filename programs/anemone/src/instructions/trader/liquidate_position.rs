@@ -4,7 +4,7 @@ use anchor_spl::token_interface::{
     transfer_checked, TransferChecked,
 };
 use crate::state::{SwapMarket, SwapPosition, SwapDirection, PositionStatus, ProtocolState};
-use crate::helpers::{calculate_maintenance_margin, calculate_period_pnl};
+use crate::helpers::{calculate_maintenance_margin, calculate_period_pnl, cpi_withdraw_from_kamino};
 use crate::errors::AnemoneError;
 
 #[derive(Accounts)]
@@ -13,7 +13,7 @@ pub struct LiquidatePosition<'info> {
         seeds = [b"protocol"],
         bump = protocol_state.bump,
     )]
-    pub protocol_state: Account<'info, ProtocolState>,
+    pub protocol_state: Box<Account<'info, ProtocolState>>,
 
     #[account(
         mut,
@@ -30,7 +30,7 @@ pub struct LiquidatePosition<'info> {
         constraint = swap_position.market == market.key() @ AnemoneError::InvalidVault,
         constraint = swap_position.status == PositionStatus::Open @ AnemoneError::PositionNotOpen,
     )]
-    pub swap_position: Account<'info, SwapPosition>,
+    pub swap_position: Box<Account<'info, SwapPosition>>,
 
     /// LP vault — source/dest for mark-to-market PnL settled on liquidation
     #[account(
@@ -80,6 +80,55 @@ pub struct LiquidatePosition<'info> {
     pub liquidator: Signer<'info>,
 
     pub token_program: Interface<'info, TokenInterface>,
+
+    // ----- Kamino accounts for internal redeem-on-shortfall -----
+    //
+    // liquidate_position drains lp_vault for catchup_unpaid_pnl + max(mtm_pnl,
+    // 0). If lp_vault is short, the program redeems the difference from
+    // Kamino in the same tx. Without this, a liquidator would have to bundle
+    // a separate withdraw_from_kamino preInstruction (or wait for the keeper),
+    // which re-introduces the grief vector PR #25 opened. See claim_matured.rs
+    // for the full design rationale; this is the keeper-side mirror.
+
+    #[account(
+        mut,
+        address = market.kamino_deposit_account @ AnemoneError::InvalidVault,
+    )]
+    pub kamino_deposit_account: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    /// CHECK: Validated by Kamino program during CPI
+    #[account(mut)]
+    pub kamino_reserve: AccountInfo<'info>,
+
+    /// CHECK: Validated by Kamino program during CPI
+    pub kamino_lending_market: AccountInfo<'info>,
+
+    /// CHECK: Validated by Kamino program during CPI
+    pub kamino_lending_market_authority: AccountInfo<'info>,
+
+    /// CHECK: Validated by Kamino program during CPI; must match underlying_mint
+    pub reserve_liquidity_mint: Box<InterfaceAccount<'info, Mint>>,
+
+    /// CHECK: Validated by Kamino program during CPI
+    #[account(mut)]
+    pub reserve_liquidity_supply: AccountInfo<'info>,
+
+    /// CHECK: Validated by Kamino program during CPI
+    #[account(mut)]
+    pub reserve_collateral_mint: AccountInfo<'info>,
+
+    pub collateral_token_program: Interface<'info, TokenInterface>,
+
+    pub liquidity_token_program: Interface<'info, TokenInterface>,
+
+    /// CHECK: Fixed address validated by Kamino
+    pub instruction_sysvar_account: AccountInfo<'info>,
+
+    /// CHECK: Validated against market.underlying_protocol below
+    #[account(
+        constraint = kamino_program.key() == market.underlying_protocol @ AnemoneError::InvalidReserve,
+    )]
+    pub kamino_program: AccountInfo<'info>,
 }
 
 pub fn handle_liquidate_position(ctx: Context<LiquidatePosition>) -> Result<()> {
@@ -127,6 +176,37 @@ pub fn handle_liquidate_position(ctx: Context<LiquidatePosition>) -> Result<()> 
             elapsed,
         )?
     };
+
+    // Internal Kamino redeem on shortfall — mirror of close_position_early
+    // (see claim_matured.rs for design rationale). Total potential drain on
+    // lp_vault = unpaid_pnl + max(pnl, 0); if lp_vault has less, redeem the
+    // difference from Kamino now so the liquidation is atomic.
+    let total_lp_drain: u64 = (position.unpaid_pnl.max(0) as u64)
+        .checked_add(pnl.max(0) as u64)
+        .ok_or(AnemoneError::MathOverflow)?;
+    let lp_vault_balance = ctx.accounts.lp_vault.amount;
+    if total_lp_drain > lp_vault_balance {
+        let shortfall_k = total_lp_drain.saturating_sub(lp_vault_balance);
+        cpi_withdraw_from_kamino(
+            &ctx.accounts.kamino_program,
+            &ctx.accounts.market.to_account_info(),
+            signer_seeds,
+            &ctx.accounts.kamino_reserve,
+            &ctx.accounts.kamino_lending_market,
+            &ctx.accounts.kamino_lending_market_authority,
+            &ctx.accounts.reserve_liquidity_mint.to_account_info(),
+            &ctx.accounts.reserve_liquidity_supply,
+            &ctx.accounts.reserve_collateral_mint,
+            &ctx.accounts.kamino_deposit_account.to_account_info(),
+            &ctx.accounts.lp_vault.to_account_info(),
+            &ctx.accounts.collateral_token_program.to_account_info(),
+            &ctx.accounts.liquidity_token_program.to_account_info(),
+            &ctx.accounts.instruction_sysvar_account,
+            shortfall_k,
+        )?;
+        ctx.accounts.lp_vault.reload()?;
+        ctx.accounts.kamino_deposit_account.reload()?;
+    }
 
     // H1 catchup on existing unpaid_pnl BEFORE the MtM so that a trader
     // who is "stale underwater" only because the LP owed them money gets
@@ -283,7 +363,11 @@ pub fn handle_liquidate_position(ctx: Context<LiquidatePosition>) -> Result<()> 
 
     // Update market totals + lp_nav to mirror the MtM + catchup transfers
     // (C2 + H1). Total out of lp_vault = catchup + positive actual_delta.
+    // Also mirror any internal Kamino redeem from above into
+    // total_kamino_collateral so subsequent reads see the truth.
+    let kamino_balance_now = ctx.accounts.kamino_deposit_account.amount;
     let market = &mut ctx.accounts.market;
+    market.total_kamino_collateral = kamino_balance_now;
     let combined_out: i64 = (catchup_amount as i64)
         .checked_add(actual_delta.max(0))
         .ok_or(AnemoneError::MathOverflow)?;

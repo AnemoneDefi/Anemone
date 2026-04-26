@@ -4,6 +4,7 @@ use anchor_spl::token_interface::{
     transfer_checked, TransferChecked,
 };
 use crate::state::{SwapMarket, LpPosition, LpStatus, ProtocolState, MAX_NAV_STALENESS_SECS};
+use crate::helpers::cpi_withdraw_from_kamino;
 use crate::errors::AnemoneError;
 
 #[derive(Accounts)]
@@ -12,14 +13,14 @@ pub struct ClaimWithdrawal<'info> {
         seeds = [b"protocol"],
         bump = protocol_state.bump,
     )]
-    pub protocol_state: Account<'info, ProtocolState>,
+    pub protocol_state: Box<Account<'info, ProtocolState>>,
 
     #[account(
         mut,
         seeds = [b"market", market.underlying_reserve.as_ref(), &market.tenor_seconds.to_le_bytes()],
         bump = market.bump,
     )]
-    pub market: Account<'info, SwapMarket>,
+    pub market: Box<Account<'info, SwapMarket>>,
 
     #[account(
         mut,
@@ -28,7 +29,7 @@ pub struct ClaimWithdrawal<'info> {
         constraint = lp_position.owner == withdrawer.key() @ AnemoneError::InsufficientShares,
         constraint = lp_position.status == LpStatus::PendingWithdrawal @ AnemoneError::NoPendingWithdrawal,
     )]
-    pub lp_position: Account<'info, LpPosition>,
+    pub lp_position: Box<Account<'info, LpPosition>>,
 
     #[account(
         mut,
@@ -59,6 +60,56 @@ pub struct ClaimWithdrawal<'info> {
     pub withdrawer: Signer<'info>,
 
     pub token_program: Interface<'info, TokenInterface>,
+
+    // ----- Kamino accounts for internal redeem-on-shortfall -----
+    //
+    // claim_withdrawal pays the LP their gross_amount from lp_vault. If
+    // lp_vault is short (the keeper hasn't refilled, or 100% of capital sits
+    // in Kamino under the JIT model), the program redeems the difference from
+    // Kamino in the same tx. Without this, the LP would have to bundle a
+    // separate withdraw_from_kamino preInstruction (or wait for the keeper),
+    // re-introducing the grief vector PR #25 opened. See claim_matured.rs for
+    // the full design rationale; this is the LP-side mirror.
+
+    #[account(
+        mut,
+        address = market.kamino_deposit_account @ AnemoneError::InvalidVault,
+    )]
+    pub kamino_deposit_account: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    /// CHECK: Validated by Kamino program during CPI
+    #[account(mut)]
+    pub kamino_reserve: AccountInfo<'info>,
+
+    /// CHECK: Validated by Kamino program during CPI
+    pub kamino_lending_market: AccountInfo<'info>,
+
+    /// CHECK: Validated by Kamino program during CPI
+    pub kamino_lending_market_authority: AccountInfo<'info>,
+
+    /// CHECK: Validated by Kamino program during CPI; must match underlying_mint
+    pub reserve_liquidity_mint: Box<InterfaceAccount<'info, Mint>>,
+
+    /// CHECK: Validated by Kamino program during CPI
+    #[account(mut)]
+    pub reserve_liquidity_supply: AccountInfo<'info>,
+
+    /// CHECK: Validated by Kamino program during CPI
+    #[account(mut)]
+    pub reserve_collateral_mint: AccountInfo<'info>,
+
+    pub collateral_token_program: Interface<'info, TokenInterface>,
+
+    pub liquidity_token_program: Interface<'info, TokenInterface>,
+
+    /// CHECK: Fixed address validated by Kamino
+    pub instruction_sysvar_account: AccountInfo<'info>,
+
+    /// CHECK: Validated against market.underlying_protocol below
+    #[account(
+        constraint = kamino_program.key() == market.underlying_protocol @ AnemoneError::InvalidReserve,
+    )]
+    pub kamino_program: AccountInfo<'info>,
 }
 
 pub fn handle_claim_withdrawal(ctx: Context<ClaimWithdrawal>) -> Result<()> {
@@ -75,11 +126,46 @@ pub fn handle_claim_withdrawal(ctx: Context<ClaimWithdrawal>) -> Result<()> {
     let gross_amount = ctx.accounts.lp_position.withdrawal_amount;
     require!(gross_amount > 0, AnemoneError::NoPendingWithdrawal);
 
-    // Vault must be refilled by the keeper before the LP can claim.
-    require!(
-        ctx.accounts.lp_vault.amount >= gross_amount,
-        AnemoneError::InsufficientVaultLiquidity,
-    );
+    // PDA signer seeds (also needed by the Kamino redeem CPI below).
+    let reserve_key = ctx.accounts.market.underlying_reserve;
+    let tenor_bytes = ctx.accounts.market.tenor_seconds.to_le_bytes();
+    let bump = ctx.accounts.market.bump;
+    let signer_seeds: &[&[&[u8]]] = &[&[
+        b"market",
+        reserve_key.as_ref(),
+        &tenor_bytes,
+        &[bump],
+    ]];
+
+    // Internal Kamino redeem on shortfall — replaces the old
+    // `require!(lp_vault.amount >= gross_amount, InsufficientVaultLiquidity)`
+    // gate. Under the JIT model, lp_vault is usually 0 and the LP can't get
+    // their funds without first asking someone to refill it. Redeeming
+    // inline removes that dependency: the LP signs one ix, the program
+    // redeems just enough k-USDC to cover the gross amount, and the LP gets
+    // paid in the same tx.
+    if gross_amount > ctx.accounts.lp_vault.amount {
+        let shortfall_k = gross_amount.saturating_sub(ctx.accounts.lp_vault.amount);
+        cpi_withdraw_from_kamino(
+            &ctx.accounts.kamino_program,
+            &ctx.accounts.market.to_account_info(),
+            signer_seeds,
+            &ctx.accounts.kamino_reserve,
+            &ctx.accounts.kamino_lending_market,
+            &ctx.accounts.kamino_lending_market_authority,
+            &ctx.accounts.reserve_liquidity_mint.to_account_info(),
+            &ctx.accounts.reserve_liquidity_supply,
+            &ctx.accounts.reserve_collateral_mint,
+            &ctx.accounts.kamino_deposit_account.to_account_info(),
+            &ctx.accounts.lp_vault.to_account_info(),
+            &ctx.accounts.collateral_token_program.to_account_info(),
+            &ctx.accounts.liquidity_token_program.to_account_info(),
+            &ctx.accounts.instruction_sysvar_account,
+            shortfall_k,
+        )?;
+        ctx.accounts.lp_vault.reload()?;
+        ctx.accounts.kamino_deposit_account.reload()?;
+    }
 
     // Fee is computed with the current bps; shares were already burned at
     // request time and the gross amount is locked in the LpPosition.
@@ -88,17 +174,6 @@ pub fn handle_claim_withdrawal(ctx: Context<ClaimWithdrawal>) -> Result<()> {
         .and_then(|v| v.checked_div(10_000))
         .ok_or(AnemoneError::MathOverflow)? as u64;
     let net_amount = gross_amount.checked_sub(fee).ok_or(AnemoneError::MathOverflow)?;
-
-    let market = &ctx.accounts.market;
-    let reserve_key = market.underlying_reserve;
-    let tenor_bytes = market.tenor_seconds.to_le_bytes();
-    let bump = market.bump;
-    let signer_seeds: &[&[&[u8]]] = &[&[
-        b"market",
-        reserve_key.as_ref(),
-        &tenor_bytes,
-        &[bump],
-    ]];
 
     transfer_checked(
         CpiContext::new_with_signer(
@@ -132,7 +207,13 @@ pub fn handle_claim_withdrawal(ctx: Context<ClaimWithdrawal>) -> Result<()> {
         )?;
     }
 
+    // Mirror any internal Kamino redeem from above into market state so
+    // subsequent reads see the post-CPI balance (read before the &mut borrow
+    // takes over the market account).
+    let kamino_balance_now = ctx.accounts.kamino_deposit_account.amount;
+
     let market = &mut ctx.accounts.market;
+    market.total_kamino_collateral = kamino_balance_now;
     market.lp_nav = market.lp_nav
         .checked_sub(gross_amount)
         .ok_or(AnemoneError::MathOverflow)?;
