@@ -12,23 +12,18 @@ pub struct WithdrawFromKamino<'info> {
     )]
     pub protocol_state: Account<'info, ProtocolState>,
 
-    /// Permissionless signer — anyone can pay gas to redeem k-tokens back
-    /// into `lp_vault`. The destination is a protocol-owned PDA, not the
-    /// caller, so there is no exfiltration risk and no incentive to grief
-    /// (every call costs the caller their own gas + CU).
-    ///
-    /// Why this matters: traders bundling `close_position_early` /
-    /// `claim_matured` need `lp_vault` to have cash to clear any
-    /// `unpaid_pnl` against their position. Without permissionless
-    /// withdraw, the trader is held hostage to keeper liveness — keeper
-    /// dies, position can never close. With permissionless withdraw, the
-    /// trader just bundles a `withdraw_from_kamino` preInstruction,
-    /// pays the extra ~85k CU + Kamino CPI gas themselves, and exits
-    /// atomically.
-    ///
-    /// The keeper still calls this from its own jobs in the happy path —
-    /// the constraint removal just adds a fallback path for self-service.
-    pub caller: Signer<'info>,
+    /// Keeper-only. After PRs #26+#27 added internal Kamino redeem to every
+    /// user-facing exit path (claim_matured, close_position_early,
+    /// liquidate_position, claim_withdrawal/request_withdrawal), the
+    /// trader/LP no longer needs this ix as a self-rescue lane. Leaving it
+    /// permissionless would let an attacker spam-call to keep funds parked
+    /// in lp_vault instead of earning Kamino yield (SECURITY.md Finding 3).
+    /// Keeper-gated mirrors the existing constraint on deposit_to_kamino.
+    #[account(
+        constraint = keeper.key() == protocol_state.keeper_authority
+            @ AnemoneError::InvalidAuthority,
+    )]
+    pub keeper: Signer<'info>,
 
     #[account(
         mut,

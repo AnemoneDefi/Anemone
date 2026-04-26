@@ -1,4 +1,5 @@
 use anchor_lang::prelude::*;
+use anchor_spl::token_interface::TokenAccount;
 use crate::state::ProtocolState;
 use crate::errors::AnemoneError;
 
@@ -34,8 +35,13 @@ pub struct InitializeProtocol<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
 
-    /// CHECK: Treasury token account, validated by admin off-chain
-    pub treasury: AccountInfo<'info>,
+    /// Treasury token account. Anchor validates it deserializes as a token
+    /// account here so admin typos surface at init instead of at the first
+    /// fee transfer (Finding 8). Mint isn't checked at init because the
+    /// protocol's underlying mint is set per-market — downstream handlers
+    /// (open_swap, request_withdrawal, etc.) enforce
+    /// `token::mint = underlying_mint` against this same address.
+    pub treasury: Box<InterfaceAccount<'info, TokenAccount>>,
 
     pub system_program: Program<'info, System>,
 }

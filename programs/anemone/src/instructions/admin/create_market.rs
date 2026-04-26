@@ -164,7 +164,6 @@ pub fn handle_create_market(
     market.total_lp_shares = 0;
     market.total_fixed_notional = 0;
     market.total_variable_notional = 0;
-    market.pending_withdrawals = 0;
     market.previous_rate_index = 0;
     market.previous_rate_update_ts = 0;
     market.current_rate_index = 0;
