@@ -115,19 +115,23 @@ pub fn handle_open_swap(
         .checked_sub(market.previous_rate_update_ts)
         .ok_or(AnemoneError::MathOverflow)?;
 
-    // If elapsed is 0 (two updates in same second) or indices are equal,
-    // APY cannot be computed — default to 0
-    let current_apy_bps = if elapsed <= 0
-        || market.current_rate_index == market.previous_rate_index
-    {
-        0u64
-    } else {
-        calculate_current_apy_from_index(
-            market.previous_rate_index,
-            market.current_rate_index,
-            elapsed,
-        )?
-    };
+    // Layer 3 of the rate-index-collapse defense (see SECURITY.md Finding 2).
+    // If `elapsed <= 0` or `current == previous`, the keeper's two snapshots
+    // collapsed and we cannot derive a real APY. Layers 1 and 2 in
+    // update_rate_index prevent this from happening, but we keep the third
+    // layer here as a hard reject so any future regression surfaces as a
+    // clear `RateIndexNotInitialized` instead of silently quoting PayFixed
+    // at `fixed_rate = 0 + spread`. Belt and suspenders.
+    require!(
+        elapsed > 0 && market.current_rate_index > market.previous_rate_index,
+        AnemoneError::RateIndexNotInitialized,
+    );
+
+    let current_apy_bps = calculate_current_apy_from_index(
+        market.previous_rate_index,
+        market.current_rate_index,
+        elapsed,
+    )?;
 
     // 3. Calculate spread (including the new swap's impact on utilization/imbalance)
     let (fixed_with_new, variable_with_new) = match direction {
