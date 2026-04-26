@@ -106,6 +106,12 @@ pub fn handle_withdraw_from_kamino(
         &[bump],
     ]];
 
+    // Snapshot lp_vault before the CPI so we can record exactly how much
+    // USDC Kamino delivered. This is the authoritative source — Kamino's
+    // internal exchange-rate math is the only thing that knows the precise
+    // amount, and reading the vault delta avoids replicating it here.
+    let lp_vault_before = ctx.accounts.lp_vault.amount;
+
     // CPI: redeem k-tokens from Kamino → USDC to lp_vault
     cpi_withdraw_from_kamino(
         &ctx.accounts.kamino_program,
@@ -125,12 +131,25 @@ pub fn handle_withdraw_from_kamino(
         collateral_amount,
     )?;
 
-    // Update tracking — read new k-token balance
+    // Update tracking — read new k-token balance and the actual USDC
+    // delivered. Decrement `last_kamino_snapshot_usdc` by the delivered
+    // amount: that USDC is no longer represented by k-tokens we hold, so
+    // the snapshot (which represents "USDC value of our k-tokens at the
+    // last sync, plus deposits, minus withdrawals") shrinks by exactly the
+    // delivered amount. Future sync_kamino_yield can isolate yield without
+    // double-counting principal exits.
     ctx.accounts.kamino_deposit_account.reload()?;
+    ctx.accounts.lp_vault.reload()?;
+    let usdc_delivered = ctx.accounts.lp_vault.amount.saturating_sub(lp_vault_before);
     let market = &mut ctx.accounts.market;
     market.total_kamino_collateral = ctx.accounts.kamino_deposit_account.amount;
+    market.last_kamino_snapshot_usdc = market.last_kamino_snapshot_usdc
+        .saturating_sub(usdc_delivered);
 
-    msg!("Withdrew {} k-tokens from Kamino", collateral_amount);
+    msg!(
+        "Withdrew {} k-tokens from Kamino ({} USDC delivered)",
+        collateral_amount, usdc_delivered,
+    );
 
     Ok(())
 }

@@ -144,8 +144,10 @@ pub fn handle_claim_withdrawal(ctx: Context<ClaimWithdrawal>) -> Result<()> {
     // inline removes that dependency: the LP signs one ix, the program
     // redeems just enough k-USDC to cover the gross amount, and the LP gets
     // paid in the same tx.
+    let mut kamino_redeemed_usdc: u64 = 0;
     if gross_amount > ctx.accounts.lp_vault.amount {
         let shortfall_k = gross_amount.saturating_sub(ctx.accounts.lp_vault.amount);
+        let lp_vault_before_cpi = ctx.accounts.lp_vault.amount;
         cpi_withdraw_from_kamino(
             &ctx.accounts.kamino_program,
             &ctx.accounts.market.to_account_info(),
@@ -165,6 +167,8 @@ pub fn handle_claim_withdrawal(ctx: Context<ClaimWithdrawal>) -> Result<()> {
         )?;
         ctx.accounts.lp_vault.reload()?;
         ctx.accounts.kamino_deposit_account.reload()?;
+        kamino_redeemed_usdc = ctx.accounts.lp_vault.amount
+            .saturating_sub(lp_vault_before_cpi);
     }
 
     // Fee is computed with the current bps; shares were already burned at
@@ -209,11 +213,17 @@ pub fn handle_claim_withdrawal(ctx: Context<ClaimWithdrawal>) -> Result<()> {
 
     // Mirror any internal Kamino redeem from above into market state so
     // subsequent reads see the post-CPI balance (read before the &mut borrow
-    // takes over the market account).
+    // takes over the market account). When the CPI fired, decrement
+    // last_kamino_snapshot_usdc by the delivered USDC so the next
+    // sync_kamino_yield computes a clean yield delta.
     let kamino_balance_now = ctx.accounts.kamino_deposit_account.amount;
 
     let market = &mut ctx.accounts.market;
     market.total_kamino_collateral = kamino_balance_now;
+    if kamino_redeemed_usdc > 0 {
+        market.last_kamino_snapshot_usdc = market.last_kamino_snapshot_usdc
+            .saturating_sub(kamino_redeemed_usdc);
+    }
     market.lp_nav = market.lp_nav
         .checked_sub(gross_amount)
         .ok_or(AnemoneError::MathOverflow)?;

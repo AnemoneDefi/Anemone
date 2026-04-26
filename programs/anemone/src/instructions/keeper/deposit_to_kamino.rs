@@ -123,10 +123,20 @@ pub fn handle_deposit_to_kamino(
         amount,
     )?;
 
-    // Update tracking — read new k-token balance
+    // Update tracking — read new k-token balance and bump the USDC snapshot
+    // by the amount we just deposited. The k-tokens we just received are
+    // worth exactly `amount` USDC right now (Kamino mints them at the
+    // current exchange rate), so the snapshot — which represents "USDC
+    // value of our k-tokens at the last sync, plus deposits, minus
+    // withdrawals" — grows by exactly `amount`. The next sync_kamino_yield
+    // diff (kamino_value - snapshot) then isolates the yield earned on top
+    // of principal, with no double-count.
     ctx.accounts.kamino_deposit_account.reload()?;
     let market = &mut ctx.accounts.market;
     market.total_kamino_collateral = ctx.accounts.kamino_deposit_account.amount;
+    market.last_kamino_snapshot_usdc = market.last_kamino_snapshot_usdc
+        .checked_add(amount)
+        .ok_or(AnemoneError::MathOverflow)?;
 
     msg!("Deposited {} USDC to Kamino", amount);
 
