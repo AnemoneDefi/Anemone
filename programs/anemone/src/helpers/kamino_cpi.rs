@@ -2,9 +2,11 @@ use anchor_lang::prelude::*;
 use kamino_lend::cpi::{
     deposit_reserve_liquidity,
     redeem_reserve_collateral,
+    refresh_reserve,
     accounts::{
         DepositReserveLiquidity,
         RedeemReserveCollateral,
+        RefreshReserve,
     },
 };
 
@@ -48,6 +50,36 @@ pub fn cpi_deposit_to_kamino<'info>(
     );
 
     deposit_reserve_liquidity(cpi_ctx, amount)
+}
+
+/// CPI: Refresh a Kamino reserve. Updates the reserve's interest accrual,
+/// fees, and exchange-rate-related fields so a subsequent read sees current
+/// values. Required before reading the collateral-to-liquidity exchange
+/// rate (used by sync_kamino_yield to credit accrued yield to lp_nav).
+///
+/// Note: on Anemone's USDC reserve, only Scope is configured as the price
+/// source. Pass the kamino program (or any account) as a placeholder for
+/// pyth_oracle, switchboard_price_oracle, switchboard_twap_oracle — Kamino
+/// only reads the oracle that's actually wired for the reserve.
+pub fn cpi_refresh_reserve<'info>(
+    kamino_program: &AccountInfo<'info>,
+    reserve: &AccountInfo<'info>,
+    lending_market: &AccountInfo<'info>,
+    pyth_oracle: &AccountInfo<'info>,
+    switchboard_price_oracle: &AccountInfo<'info>,
+    switchboard_twap_oracle: &AccountInfo<'info>,
+    scope_prices: &AccountInfo<'info>,
+) -> Result<()> {
+    let cpi_accounts = RefreshReserve {
+        reserve: reserve.clone(),
+        lending_market: lending_market.clone(),
+        pyth_oracle: pyth_oracle.clone(),
+        switchboard_price_oracle: switchboard_price_oracle.clone(),
+        switchboard_twap_oracle: switchboard_twap_oracle.clone(),
+        scope_prices: scope_prices.clone(),
+    };
+    let cpi_ctx = CpiContext::new(kamino_program.clone(), cpi_accounts);
+    refresh_reserve(cpi_ctx)
 }
 
 /// CPI: Redeem k-tokens from Kamino, receiving USDC back to lp_vault

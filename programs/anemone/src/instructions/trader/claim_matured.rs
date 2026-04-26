@@ -142,11 +142,13 @@ pub fn handle_claim_matured(ctx: Context<ClaimMatured>) -> Result<()> {
     // reserves), so requesting `shortfall` k-USDC always yields >=
     // `shortfall` USDC. The excess (if any) stays in lp_vault as a small
     // unintended buffer that the keeper rebalances on its next cycle.
+    let mut kamino_redeemed_usdc: u64 = 0;
     if position.unpaid_pnl > 0 {
         let needed = position.unpaid_pnl as u64;
         let lp_vault_balance = ctx.accounts.lp_vault.amount;
         if needed > lp_vault_balance {
             let shortfall_k = needed.saturating_sub(lp_vault_balance);
+            let lp_vault_before_cpi = ctx.accounts.lp_vault.amount;
             cpi_withdraw_from_kamino(
                 &ctx.accounts.kamino_program,
                 &ctx.accounts.market.to_account_info(),
@@ -167,6 +169,11 @@ pub fn handle_claim_matured(ctx: Context<ClaimMatured>) -> Result<()> {
             // Refresh balance after CPI so the catchup below sees the new state.
             ctx.accounts.lp_vault.reload()?;
             ctx.accounts.kamino_deposit_account.reload()?;
+            // Capture the actual USDC Kamino delivered for the snapshot
+            // accounting at the bottom of the handler (mirrors the keeper's
+            // withdraw_from_kamino bookkeeping).
+            kamino_redeemed_usdc = ctx.accounts.lp_vault.amount
+                .saturating_sub(lp_vault_before_cpi);
         }
     }
 
@@ -227,6 +234,10 @@ pub fn handle_claim_matured(ctx: Context<ClaimMatured>) -> Result<()> {
     // Update market totals + lp_nav for the catchup drain.
     // Also mirror any internal Kamino redeem that happened above into
     // market.total_kamino_collateral so subsequent reads see the truth.
+    // When the CPI fired, decrement last_kamino_snapshot_usdc by the
+    // delivered USDC — same bookkeeping the keeper's withdraw_from_kamino
+    // does, so future sync_kamino_yield can isolate yield without
+    // double-counting principal exits.
     let kamino_balance_now = ctx.accounts.kamino_deposit_account.amount;
     let market = &mut ctx.accounts.market;
     if catchup_amount > 0 {
@@ -235,6 +246,10 @@ pub fn handle_claim_matured(ctx: Context<ClaimMatured>) -> Result<()> {
             .ok_or(AnemoneError::MathOverflow)?;
     }
     market.total_kamino_collateral = kamino_balance_now;
+    if kamino_redeemed_usdc > 0 {
+        market.last_kamino_snapshot_usdc = market.last_kamino_snapshot_usdc
+            .saturating_sub(kamino_redeemed_usdc);
+    }
     match direction {
         SwapDirection::PayFixed => {
             market.total_fixed_notional = market.total_fixed_notional

@@ -17,6 +17,62 @@ pub fn read_kamino_rate_index(reserve_loader: &AccountLoader<Reserve>) -> Result
     Ok(lower | upper)
 }
 
+/// Klend's scaled-fraction shift: u128 fields ending in `_sf` are stored as
+/// `actual_value << 60`. Right-shift by this to get base units.
+const KAMINO_SF_SHIFT: u32 = 60;
+
+/// Converts a k-token (collateral) amount into its current USDC-equivalent
+/// value, using the Kamino reserve's post-refresh exchange rate.
+///
+/// Formula (matches klend's internal `total_liquidity` + `mint_total_supply`):
+///
+/// ```text
+///   total_liquidity = available_amount
+///                   + (borrowed_amount_sf            >> 60)
+///                   - (accumulated_protocol_fees_sf  >> 60)
+///                   - (accumulated_referrer_fees_sf  >> 60)
+///                   - (pending_referrer_fees_sf      >> 60)
+///   exchange_rate   = total_liquidity / mint_total_supply
+///   usdc_value      = collateral_amount * exchange_rate
+/// ```
+///
+/// IMPORTANT: caller must `cpi_refresh_reserve` in the same tx, otherwise
+/// `borrowed_amount_sf` is stale and the value will be slightly off (and
+/// klend's `last_update.stale = 1`). The returned `u64` saturates the math
+/// at `u64::MAX` only on absurd values that wouldn't occur with sane k-token
+/// balances.
+pub fn read_kamino_collateral_to_liquidity(
+    reserve_loader: &AccountLoader<Reserve>,
+    collateral_amount: u64,
+) -> Result<u64> {
+    let reserve = reserve_loader.load()?;
+    let liq = &reserve.liquidity;
+    let coll = &reserve.collateral;
+
+    let available = liq.available_amount as u128;
+    let borrowed = liq.borrowed_amount_sf >> KAMINO_SF_SHIFT;
+    let protocol_fees = liq.accumulated_protocol_fees_sf >> KAMINO_SF_SHIFT;
+    let referrer_fees = liq.accumulated_referrer_fees_sf >> KAMINO_SF_SHIFT;
+    let pending_referrer = liq.pending_referrer_fees_sf >> KAMINO_SF_SHIFT;
+
+    let total_liquidity = available
+        .checked_add(borrowed)
+        .and_then(|v| v.checked_sub(protocol_fees))
+        .and_then(|v| v.checked_sub(referrer_fees))
+        .and_then(|v| v.checked_sub(pending_referrer))
+        .ok_or(AnemoneError::MathOverflow)?;
+
+    let mint_total_supply = coll.mint_total_supply;
+    require!(mint_total_supply > 0, AnemoneError::MathOverflow);
+
+    let usdc_value = (collateral_amount as u128)
+        .checked_mul(total_liquidity)
+        .and_then(|v| v.checked_div(mint_total_supply as u128))
+        .ok_or(AnemoneError::MathOverflow)?;
+
+    u64::try_from(usdc_value).map_err(|_| AnemoneError::MathOverflow.into())
+}
+
 /// Converts a rate index delta over a time period into an annualized APY in basis points.
 /// Uses Taylor expansion with 3 terms for >99.6% precision vs true compound.
 ///

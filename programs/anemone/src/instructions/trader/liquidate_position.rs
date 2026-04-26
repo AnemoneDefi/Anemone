@@ -185,8 +185,10 @@ pub fn handle_liquidate_position(ctx: Context<LiquidatePosition>) -> Result<()> 
         .checked_add(pnl.max(0) as u64)
         .ok_or(AnemoneError::MathOverflow)?;
     let lp_vault_balance = ctx.accounts.lp_vault.amount;
+    let mut kamino_redeemed_usdc: u64 = 0;
     if total_lp_drain > lp_vault_balance {
         let shortfall_k = total_lp_drain.saturating_sub(lp_vault_balance);
+        let lp_vault_before_cpi = ctx.accounts.lp_vault.amount;
         cpi_withdraw_from_kamino(
             &ctx.accounts.kamino_program,
             &ctx.accounts.market.to_account_info(),
@@ -206,6 +208,8 @@ pub fn handle_liquidate_position(ctx: Context<LiquidatePosition>) -> Result<()> 
         )?;
         ctx.accounts.lp_vault.reload()?;
         ctx.accounts.kamino_deposit_account.reload()?;
+        kamino_redeemed_usdc = ctx.accounts.lp_vault.amount
+            .saturating_sub(lp_vault_before_cpi);
     }
 
     // H1 catchup on existing unpaid_pnl BEFORE the MtM so that a trader
@@ -364,10 +368,16 @@ pub fn handle_liquidate_position(ctx: Context<LiquidatePosition>) -> Result<()> 
     // Update market totals + lp_nav to mirror the MtM + catchup transfers
     // (C2 + H1). Total out of lp_vault = catchup + positive actual_delta.
     // Also mirror any internal Kamino redeem from above into
-    // total_kamino_collateral so subsequent reads see the truth.
+    // total_kamino_collateral and decrement last_kamino_snapshot_usdc by
+    // the delivered USDC so the next sync_kamino_yield computes a clean
+    // yield delta.
     let kamino_balance_now = ctx.accounts.kamino_deposit_account.amount;
     let market = &mut ctx.accounts.market;
     market.total_kamino_collateral = kamino_balance_now;
+    if kamino_redeemed_usdc > 0 {
+        market.last_kamino_snapshot_usdc = market.last_kamino_snapshot_usdc
+            .saturating_sub(kamino_redeemed_usdc);
+    }
     let combined_out: i64 = (catchup_amount as i64)
         .checked_add(actual_delta.max(0))
         .ok_or(AnemoneError::MathOverflow)?;
