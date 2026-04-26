@@ -537,8 +537,10 @@ describe("anemone", () => {
       const tx = await program.methods
         .updateRateIndex()
         .accountsStrict({
+          protocolState: protocolStatePda,
           market: kaminoMarketPda,
           kaminoReserve: KAMINO_USDC_RESERVE,
+          keeper: authority.publicKey,
         })
         .rpc();
 
@@ -567,13 +569,77 @@ describe("anemone", () => {
         await program.methods
           .updateRateIndex()
           .accountsStrict({
+            protocolState: protocolStatePda,
             market: kaminoMarketPda,
             kaminoReserve: fakeReserve.publicKey,
+            keeper: authority.publicKey,
           })
           .rpc();
         assert.fail("Should have thrown");
       } catch (err) {
         console.log("Wrong reserve correctly rejected ✓");
+      }
+    });
+
+    it("rejects update_rate_index from non-keeper signer", async () => {
+      // Layer 1 of the rate-index-collapse defense (SECURITY.md Finding 2).
+      // A random signer must not be able to call update_rate_index.
+      const stranger = Keypair.generate();
+      const sig = await provider.connection.requestAirdrop(stranger.publicKey, 1_000_000_000);
+      const bh = await provider.connection.getLatestBlockhash();
+      await provider.connection.confirmTransaction({
+        signature: sig,
+        blockhash: bh.blockhash,
+        lastValidBlockHeight: bh.lastValidBlockHeight,
+      });
+
+      try {
+        await program.methods
+          .updateRateIndex()
+          .accountsStrict({
+            protocolState: protocolStatePda,
+            market: kaminoMarketPda,
+            kaminoReserve: KAMINO_USDC_RESERVE,
+            keeper: stranger.publicKey,
+          })
+          .signers([stranger])
+          .rpc();
+        assert.fail("Should have thrown — non-keeper signer");
+      } catch (err: any) {
+        assert.include(err.toString(), "InvalidAuthority");
+        console.log("Non-keeper signer correctly rejected ✓");
+      }
+    });
+
+    it("rejects no-op rotation (Kamino bsf has not moved)", async () => {
+      // Layer 2 of the rate-index-collapse defense (SECURITY.md Finding 2).
+      // A second call against the same Kamino fixture (same bsf) must revert
+      // with InvalidRateIndex, otherwise an attacker could collapse the
+      // snapshot pair atomically and grief PayFixed pricing.
+      // First call already happened in the prior test ("reads rate index
+      // from real Kamino Reserve"), so kaminoMarketPda.current_rate_index
+      // already holds the fixture bsf. A repeat call must reject.
+      try {
+        await program.methods
+          .updateRateIndex()
+          .accountsStrict({
+            protocolState: protocolStatePda,
+            market: kaminoMarketPda,
+            kaminoReserve: KAMINO_USDC_RESERVE,
+            keeper: authority.publicKey,
+          })
+          .rpc();
+        assert.fail("Should have thrown — no-op rotation");
+      } catch (err: any) {
+        // Either the strict-monotonic check (InvalidRateIndex) or the
+        // min-elapsed check (InvalidElapsedTime) trips first depending on
+        // wall-clock timing. Both are correct rejections.
+        const s = err.toString();
+        assert.isTrue(
+          s.includes("InvalidRateIndex") || s.includes("InvalidElapsedTime"),
+          `Expected InvalidRateIndex/InvalidElapsedTime, got: ${s}`,
+        );
+        console.log("No-op rotation correctly rejected ✓");
       }
     });
   });
@@ -962,25 +1028,34 @@ describe("anemone", () => {
 
       console.log("LP deposited $100k ✓");
 
-      // Update rate index TWICE to populate both previous and current
+      // Seed two distinct rate-index snapshots via the admin stub-oracle
+      // path. We cannot rely on update_rate_index here: the Kamino fixture
+      // is static, so a second read returns the same bsf value and now
+      // (post Finding 2 fix) trips the layer-2 strict-monotonic check.
+      // Stub oracle lets us write the two values we want, with an 8s gap
+      // so calculate_current_apy_from_index has enough elapsed to avoid
+      // term3 overflow.
+      const SEED_BASE = new anchor.BN("1000000000000000000");
+      const SEED_TICK = new anchor.BN("33333333333"); // ~13% APY @ 8s elapsed
       await program.methods
-        .updateRateIndex()
+        .setRateIndexOracle(SEED_BASE)
         .accountsStrict({
+          protocolState: protocolStatePda,
           market: swapMarketPda,
-          kaminoReserve: KAMINO_USDC_RESERVE,
+          authority: authority.publicKey,
+        })
+        .rpc();
+      await new Promise((r) => setTimeout(r, 9000));
+      await program.methods
+        .setRateIndexOracle(SEED_BASE.add(SEED_TICK))
+        .accountsStrict({
+          protocolState: protocolStatePda,
+          market: swapMarketPda,
+          authority: authority.publicKey,
         })
         .rpc();
 
-      // Small delay then second update to rotate
-      await program.methods
-        .updateRateIndex()
-        .accountsStrict({
-          market: swapMarketPda,
-          kaminoReserve: KAMINO_USDC_RESERVE,
-        })
-        .rpc();
-
-      console.log("Rate index updated twice (previous + current) ✓");
+      console.log("Rate index seeded (previous + current, 8s apart) ✓");
 
       // Create treasury token account for this underlying mint
       // The treasury address is treasury.publicKey (the Keypair from above)
@@ -1734,15 +1809,20 @@ describe("anemone", () => {
         })
         .rpc();
 
-      // Update rate index 2x
-      await program.methods.updateRateIndex().accountsStrict({
+      // Seed two distinct rate-index snapshots via the admin stub-oracle
+      // path (see open_swap setup for rationale).
+      const SHORT_SEED_BASE = new anchor.BN("1000000000000000000");
+      const SHORT_SEED_TICK = new anchor.BN("33333333333");
+      await program.methods.setRateIndexOracle(SHORT_SEED_BASE).accountsStrict({
+        protocolState: protocolStatePda,
         market: shortMarketPda,
-        kaminoReserve: KAMINO_USDC_RESERVE,
+        authority: authority.publicKey,
       }).rpc();
-
-      await program.methods.updateRateIndex().accountsStrict({
+      await new Promise((r) => setTimeout(r, 9000));
+      await program.methods.setRateIndexOracle(SHORT_SEED_BASE.add(SHORT_SEED_TICK)).accountsStrict({
+        protocolState: protocolStatePda,
         market: shortMarketPda,
-        kaminoReserve: KAMINO_USDC_RESERVE,
+        authority: authority.publicKey,
       }).rpc();
 
       // Open swap
@@ -2558,11 +2638,20 @@ describe("anemone", () => {
         })
         .rpc();
 
-      await program.methods.updateRateIndex().accountsStrict({
-        market: earlyMarketPda, kaminoReserve: KAMINO_USDC_RESERVE,
+      // Seed two distinct rate-index snapshots via the admin stub-oracle
+      // path (see open_swap setup for rationale).
+      const EARLY_SEED_BASE = new anchor.BN("1000000000000000000");
+      const EARLY_SEED_TICK = new anchor.BN("33333333333");
+      await program.methods.setRateIndexOracle(EARLY_SEED_BASE).accountsStrict({
+        protocolState: protocolStatePda,
+        market: earlyMarketPda,
+        authority: authority.publicKey,
       }).rpc();
-      await program.methods.updateRateIndex().accountsStrict({
-        market: earlyMarketPda, kaminoReserve: KAMINO_USDC_RESERVE,
+      await new Promise((r) => setTimeout(r, 9000));
+      await program.methods.setRateIndexOracle(EARLY_SEED_BASE.add(EARLY_SEED_TICK)).accountsStrict({
+        protocolState: protocolStatePda,
+        market: earlyMarketPda,
+        authority: authority.publicKey,
       }).rpc();
 
       const nonce = 0;

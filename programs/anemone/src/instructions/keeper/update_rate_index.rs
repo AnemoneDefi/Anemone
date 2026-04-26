@@ -1,11 +1,17 @@
 use anchor_lang::prelude::*;
 use kamino_lend::state::Reserve;
-use crate::state::SwapMarket;
+use crate::state::{SwapMarket, ProtocolState};
 use crate::helpers::read_kamino_rate_index;
 use crate::errors::AnemoneError;
 
 #[derive(Accounts)]
 pub struct UpdateRateIndex<'info> {
+    #[account(
+        seeds = [b"protocol"],
+        bump = protocol_state.bump,
+    )]
+    pub protocol_state: Account<'info, ProtocolState>,
+
     #[account(
         mut,
         seeds = [b"market", market.underlying_reserve.as_ref(), &market.tenor_seconds.to_le_bytes()],
@@ -19,10 +25,31 @@ pub struct UpdateRateIndex<'info> {
             @ AnemoneError::InvalidReserve
     )]
     pub kamino_reserve: AccountLoader<'info, Reserve>,
+
+    /// Layer 1 of the rate-index-collapse defense (see SECURITY.md Finding 2).
+    /// Permissionless update_rate_index lets an attacker bundle two calls in
+    /// a single tx so both reads see the same Kamino bsf — the rotation then
+    /// collapses `previous_rate_index == current_rate_index`, and the next
+    /// open_swap quotes apy = 0 against PayFixed for ~spread bps. Gating to
+    /// the keeper closes the trivial path; layer 2 (no-op rotation reject)
+    /// and layer 3 (open_swap apy=0 reject) cover keeper-bot misfires and
+    /// future regressions.
+    #[account(
+        constraint = keeper.key() == protocol_state.keeper_authority
+            @ AnemoneError::InvalidAuthority,
+    )]
+    pub keeper: Signer<'info>,
 }
 
 /// Maximum slots a Reserve can be stale before we reject the update (~5 minutes)
 pub const MAX_STALE_SLOTS: u64 = 750;
+
+/// Layer 2 of the rate-index-collapse defense. Even with keeper-only access,
+/// a buggy cron / retry could double-fire and collapse the snapshots. We
+/// require at least this many seconds between updates so the snapshot pair
+/// stays well-separated. Set conservatively low — keeper cadence is minutes,
+/// not seconds, so this is just a floor against same-second double-fires.
+pub const MIN_RATE_UPDATE_ELAPSED_SECS: i64 = 8;
 
 pub fn handle_update_rate_index(ctx: Context<UpdateRateIndex>) -> Result<()> {
     let reserve = ctx.accounts.kamino_reserve.load()?;
@@ -61,8 +88,38 @@ pub fn handle_update_rate_index(ctx: Context<UpdateRateIndex>) -> Result<()> {
 
     let market = &mut ctx.accounts.market;
     let rate_index = read_kamino_rate_index(&ctx.accounts.kamino_reserve)?;
+    let now = Clock::get()?.unix_timestamp;
 
     require!(rate_index > 0, AnemoneError::InvalidRateIndex);
+
+    // Layer 2 of the rate-index-collapse defense (see SECURITY.md Finding 2).
+    // Two checks:
+    //
+    //   (a) Strictly-monotonic rotation. Kamino's `cumulative_borrow_rate_bsf`
+    //       is monotonically non-decreasing. If our read equals the existing
+    //       `current_rate_index`, the bsf has not moved and we would just
+    //       collapse the snapshot pair (prev = curr after rotation). Reject.
+    //
+    //   (b) Minimum elapsed since last update. Prevents same-slot/same-second
+    //       double-fires where elapsed in open_swap collapses to zero. Also
+    //       guards `calculate_current_apy_from_index` against the term3
+    //       overflow path that fires when n = year/elapsed grows past u128.
+    //
+    // First-init path: when current_rate_index == 0 the market has never
+    // been seeded — we accept any positive rate_index without the (a) check.
+    if market.current_rate_index > 0 {
+        require!(
+            rate_index > market.current_rate_index,
+            AnemoneError::InvalidRateIndex,
+        );
+        let elapsed_since_last = now
+            .checked_sub(market.last_rate_update_ts)
+            .ok_or(AnemoneError::MathOverflow)?;
+        require!(
+            elapsed_since_last >= MIN_RATE_UPDATE_ELAPSED_SECS,
+            AnemoneError::InvalidElapsedTime,
+        );
+    }
 
     // Rotate: current → previous (keeps two snapshots for APY calculation)
     if market.current_rate_index > 0 {
@@ -71,7 +128,7 @@ pub fn handle_update_rate_index(ctx: Context<UpdateRateIndex>) -> Result<()> {
     }
 
     market.current_rate_index = rate_index;
-    market.last_rate_update_ts = Clock::get()?.unix_timestamp;
+    market.last_rate_update_ts = now;
 
     msg!("Rate index updated: {}", rate_index);
 
