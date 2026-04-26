@@ -19,6 +19,13 @@ use crate::errors::AnemoneError;
 /// lowering it risks DoSing `open_swap` when Solana fee markets are hot.
 pub const MAX_QUOTE_STALENESS_SECS: i64 = 600;
 
+/// Minimum swap notional in underlying base units. With 6-decimal USDC this
+/// is $10. Each open position consumes per-settle keeper CU/RPC roughly
+/// independent of size, so positions below this threshold burn keeper
+/// resources for negligible fee revenue and can be used to grief settlement.
+/// See SECURITY.md Finding 9.
+pub const MIN_NOTIONAL: u64 = 10_000_000;
+
 #[derive(Accounts)]
 #[instruction(direction: SwapDirection, notional: u64, nonce: u8, max_rate_bps: u64, min_rate_bps: u64)]
 pub struct OpenSwap<'info> {
@@ -91,6 +98,8 @@ pub fn handle_open_swap(
     min_rate_bps: u64,
 ) -> Result<()> {
     require!(notional > 0, AnemoneError::InvalidAmount);
+    // Finding 9: block dust positions that would grief settlement.
+    require!(notional >= MIN_NOTIONAL, AnemoneError::InvalidAmount);
 
     let market = &ctx.accounts.market;
     let protocol_state = &ctx.accounts.protocol_state;
@@ -151,7 +160,6 @@ pub fn handle_open_swap(
         market.lp_nav,
         fixed_with_new,
         variable_with_new,
-        market.pending_withdrawals,
     )?;
 
     // 4. Calculate offered fixed rate
@@ -192,7 +200,6 @@ pub fn handle_open_swap(
     let new_total_notional = (market.total_fixed_notional as u128)
         .checked_add(market.total_variable_notional as u128)
         .and_then(|v| v.checked_add(notional as u128))
-        .and_then(|v| v.checked_add(market.pending_withdrawals as u128))
         .ok_or(AnemoneError::MathOverflow)?;
 
     let utilization_bps = new_total_notional

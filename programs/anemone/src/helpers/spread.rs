@@ -13,7 +13,6 @@ pub fn calculate_spread_bps(
     lp_nav: u64,
     total_fixed_notional: u64,
     total_variable_notional: u64,
-    pending_withdrawals: u64,
 ) -> Result<u64, AnemoneError> {
     if lp_nav == 0 {
         return Ok(base_spread_bps as u64);
@@ -23,10 +22,8 @@ pub fn calculate_spread_bps(
     let max_util = max_utilization_bps as u128;
     let deposits = lp_nav as u128;
 
-    // Utilization = (total_notional + pending_withdrawals) / lp_nav
     let total_notional = (total_fixed_notional as u128)
         .checked_add(total_variable_notional as u128)
-        .and_then(|v| v.checked_add(pending_withdrawals as u128))
         .ok_or(AnemoneError::MathOverflow)?;
 
     // utilization_bps = total_notional * 10_000 / deposits
@@ -111,8 +108,7 @@ mod tests {
 
     #[test]
     fn base_spread_only_no_utilization() {
-        // No positions open → S_total = S_base only
-        let result = calculate_spread_bps(80, 6000, 1_000_000, 0, 0, 0).unwrap();
+        let result = calculate_spread_bps(80, 6000, 1_000_000, 0, 0).unwrap();
         assert_eq!(result, 80, "Empty pool should return base spread");
     }
 
@@ -120,47 +116,35 @@ mod tests {
     fn half_utilization_no_imbalance() {
         // 30% utilization (half of 60% max), balanced
         // S_base = 80, S_util = 80 * 3000/6000 = 40, S_imbal = 0
-        let result = calculate_spread_bps(80, 6000, 1_000_000, 150_000, 150_000, 0).unwrap();
+        let result = calculate_spread_bps(80, 6000, 1_000_000, 150_000, 150_000).unwrap();
         assert_eq!(result, 120, "50% of max util → S_base(80) + S_util(40) = 120");
     }
 
     #[test]
     fn max_utilization_no_imbalance() {
         // 60% utilization (at max), balanced
-        // S_base = 80, S_util = 80, S_imbal = 0
-        let result = calculate_spread_bps(80, 6000, 1_000_000, 300_000, 300_000, 0).unwrap();
+        let result = calculate_spread_bps(80, 6000, 1_000_000, 300_000, 300_000).unwrap();
         assert_eq!(result, 160, "Max util → S_base(80) + S_util(80) = 160");
     }
 
     #[test]
     fn imbalanced_market() {
         // 20% utilization, fully one-sided (all PayFixed, no ReceiveFixed)
-        // S_base = 80, S_util = 80 * 2000/6000 = 26, S_imbal = 200_000 * 100 / 1_000_000 = 20
-        let result = calculate_spread_bps(80, 6000, 1_000_000, 200_000, 0, 0).unwrap();
+        let result = calculate_spread_bps(80, 6000, 1_000_000, 200_000, 0).unwrap();
         assert_eq!(result, 126, "Imbalanced: S_base(80) + S_util(26) + S_imbal(20) = 126");
     }
 
     #[test]
     fn heavily_imbalanced_hot_market() {
         // 50% utilization, all one side
-        // S_util = 80 * 5000/6000 = 66, S_imbal = 500_000 * 100 / 1_000_000 = 50
-        let result = calculate_spread_bps(80, 6000, 1_000_000, 500_000, 0, 0).unwrap();
+        let result = calculate_spread_bps(80, 6000, 1_000_000, 500_000, 0).unwrap();
         assert_eq!(result, 196, "Hot imbalanced: S_base(80) + S_util(66) + S_imbal(50) = 196");
     }
 
     #[test]
     fn zero_deposits_returns_base() {
-        let result = calculate_spread_bps(80, 6000, 0, 0, 0, 0).unwrap();
+        let result = calculate_spread_bps(80, 6000, 0, 0, 0).unwrap();
         assert_eq!(result, 80, "Zero deposits should return base spread");
-    }
-
-    #[test]
-    fn pending_withdrawals_increase_utilization() {
-        // 100k notional + 100k pending = 200k effective / 1M deposits = 20% util
-        // vs 100k notional alone = 10% util
-        let with_pending = calculate_spread_bps(80, 6000, 1_000_000, 50_000, 50_000, 100_000).unwrap();
-        let without_pending = calculate_spread_bps(80, 6000, 1_000_000, 50_000, 50_000, 0).unwrap();
-        assert!(with_pending > without_pending, "Pending withdrawals should widen spread");
     }
 
     // ========== calculate_initial_margin tests ==========

@@ -99,6 +99,19 @@ describe("anemone", () => {
       6,
       fakeKaminoCollateralMint,
     );
+
+    // Treasury must be a real token account on the underlying mint before
+    // initialize_protocol (Finding 8). Using the `treasury` Keypair as the
+    // account keypair makes the resulting token account's address equal to
+    // `treasury.publicKey`, so all downstream `treasury: treasury.publicKey`
+    // references continue to work.
+    await createAccount(
+      provider.connection,
+      (authority as any).payer,
+      underlyingMint.publicKey,
+      authority.publicKey,
+      treasury,
+    );
   });
 
   describe("initialize_protocol", () => {
@@ -762,14 +775,7 @@ describe("anemone", () => {
       const totalShares = DEPOSIT_AMOUNT + 5_000_000_000; // 15,000 USDC
       const sharesToBurn = Math.floor(totalShares / 2); // 7,500
 
-      // Create treasury token account using treasury keypair so address matches protocol_state.treasury
-      const treasuryTokenAccount = await createAccount(
-        provider.connection,
-        (authority as any).payer,
-        underlyingMint.publicKey,
-        authority.publicKey,
-        treasury, // keypair → address = treasury.publicKey
-      );
+      // Treasury token account already created in the global before block.
 
       const balanceBefore = await getAccount(provider.connection, depositorTokenAccount);
 
@@ -787,6 +793,17 @@ describe("anemone", () => {
           treasury: treasury.publicKey,
           withdrawer: authority.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
+          kaminoDepositAccount: kaminoDepositPda,
+          kaminoReserve: KAMINO_USDC_RESERVE,
+          kaminoLendingMarket: KAMINO_PROGRAM_ID,
+          kaminoLendingMarketAuthority: KAMINO_PROGRAM_ID,
+          reserveLiquidityMint: underlyingMint.publicKey,
+          reserveLiquiditySupply: lpVaultPda,
+          reserveCollateralMint: collateralVaultPda,
+          collateralTokenProgram: TOKEN_PROGRAM_ID,
+          liquidityTokenProgram: TOKEN_PROGRAM_ID,
+          instructionSysvarAccount: new PublicKey("Sysvar1nstructions1111111111111111111111111"),
+          kaminoProgram: underlyingProtocol.publicKey,
         })
         .rpc();
 
@@ -829,31 +846,6 @@ describe("anemone", () => {
             treasury: treasury.publicKey,
             withdrawer: authority.publicKey,
             tokenProgram: TOKEN_PROGRAM_ID,
-          })
-          .rpc();
-        assert.fail("Should have thrown");
-      } catch (err) {
-        console.log("Insufficient shares correctly rejected ✓");
-      }
-    });
-
-    it("rejects claim_withdrawal when LP has no pending withdrawal", async () => {
-      // At this point the LP still has shares and status == Active (fast-path
-      // withdrawal earlier left them active because shares > 0). Claiming a
-      // withdrawal that was never requested must fail cleanly.
-      try {
-        await program.methods
-          .claimWithdrawal()
-          .accountsStrict({
-            protocolState: protocolStatePda,
-            market: marketPda,
-            lpPosition: lpPositionPda,
-            lpVault: lpVaultPda,
-            underlyingMint: underlyingMint.publicKey,
-            withdrawerTokenAccount: depositorTokenAccount,
-            treasury: treasury.publicKey,
-            withdrawer: authority.publicKey,
-            tokenProgram: TOKEN_PROGRAM_ID,
             kaminoDepositAccount: kaminoDepositPda,
             kaminoReserve: KAMINO_USDC_RESERVE,
             kaminoLendingMarket: KAMINO_PROGRAM_ID,
@@ -867,18 +859,15 @@ describe("anemone", () => {
             kaminoProgram: underlyingProtocol.publicKey,
           })
           .rpc();
-        assert.fail("Should have rejected — no pending withdrawal");
-      } catch (err: any) {
-        assert.include(err.toString(), "NoPendingWithdrawal");
-        console.log("claim_withdrawal correctly rejected for Active LP ✓");
+        assert.fail("Should have thrown");
+      } catch (err) {
+        console.log("Insufficient shares correctly rejected ✓");
       }
     });
 
-    // Full queue-path testing (lp_vault drained → request queues → keeper
-    // refills via withdraw_from_kamino → claim succeeds) requires the Kamino
-    // CPI to be callable, which is only possible under the Surfpool mainnet
-    // fork. Those tests live in the Surfpool suite added in Day 21. Here we
-    // cover the state-machine rejections that don't require a drained vault.
+    // Finding 5 (option b): claim_withdrawal was removed and request_withdrawal
+    // is now single-shot with the internal Kamino redeem on shortfall. The
+    // queued path / claim_withdrawal tests are gone with the queue.
   });
 
   describe("open_swap", () => {
@@ -3011,17 +3000,15 @@ describe("anemone", () => {
         .rpc();
     });
 
-    it("allows any signer to call withdraw_from_kamino (permissionless, no InvalidAuthority)", async () => {
-      // Why permissionless: traders bundling close_position_early /
-      // claim_matured need to refill lp_vault to clear unpaid_pnl. Without
-      // this, the trader is held hostage to keeper liveness — keeper dies,
-      // position can never close. The destination of withdraw is the
-      // protocol's own lp_vault PDA, so no caller can profit from gratuitous
-      // calls (they just pay their own gas).
+    it("rejects withdraw_from_kamino from a non-keeper signer (Finding 3)", async () => {
+      // PRs #26 + #27 + #29 made every user-facing exit do the Kamino redeem
+      // internally, so withdraw_from_kamino is no longer needed as a
+      // self-rescue lane. Leaving it permissionless would let an attacker
+      // spam-call to keep funds parked in lp_vault and drag yield (Finding
+      // 3). Now it's keeper-only — same constraint as deposit_to_kamino.
       const INSTRUCTIONS_SYSVAR = new PublicKey("Sysvar1nstructions1111111111111111111111111");
       const randomCaller = Keypair.generate();
 
-      // Fund the random caller with SOL so they can sign + pay gas.
       const sig = await provider.connection.requestAirdrop(
         randomCaller.publicKey,
         1_000_000_000,
@@ -3033,7 +3020,7 @@ describe("anemone", () => {
           .withdrawFromKamino(new anchor.BN(1_000))
           .accountsStrict({
             protocolState: protocolStatePda,
-            caller: randomCaller.publicKey, // NOT the keeper — must succeed past auth
+            keeper: randomCaller.publicKey,
             market: marketPda,
             lpVault: lpVaultPda,
             kaminoDepositAccount: kaminoDepositPda,
@@ -3050,17 +3037,10 @@ describe("anemone", () => {
           })
           .signers([randomCaller])
           .rpc();
-        // Either path is acceptable: it might somehow succeed (unlikely with
-        // dummy Kamino accounts) or fail at the CPI. What it MUST NOT do is
-        // fail with InvalidAuthority — that would mean the constraint is
-        // still there.
+        assert.fail("Should have rejected — non-keeper signer");
       } catch (err: any) {
-        assert.notInclude(
-          err.toString(),
-          "InvalidAuthority",
-          "withdraw_from_kamino should NOT enforce keeper authority",
-        );
-        console.log("withdraw_from_kamino is permissionless (failed past auth at CPI) ✓");
+        assert.include(err.toString(), "InvalidAuthority");
+        console.log("withdraw_from_kamino correctly rejects non-keeper signers ✓");
       }
     });
 
