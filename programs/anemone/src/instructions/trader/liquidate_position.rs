@@ -62,7 +62,8 @@ pub struct LiquidatePosition<'info> {
     )]
     pub owner_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
 
-    /// Liquidator's token account — receives the liquidation fee
+    /// Liquidator's token account — receives the liquidator's share of the
+    /// liquidation fee (2/3 of the total).
     #[account(
         mut,
         token::mint = underlying_mint,
@@ -70,13 +71,24 @@ pub struct LiquidatePosition<'info> {
     )]
     pub liquidator_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
 
+    /// Treasury — receives the protocol's share of the liquidation fee
+    /// (1/3 of the total). Same address as `protocol_state.treasury`.
+    #[account(
+        mut,
+        token::mint = underlying_mint,
+        address = protocol_state.treasury @ AnemoneError::InvalidVault,
+    )]
+    pub treasury: Box<InterfaceAccount<'info, TokenAccount>>,
+
     /// The underlying token mint (e.g. USDC)
     #[account(
         address = market.underlying_mint @ AnemoneError::InvalidMint,
     )]
     pub underlying_mint: Box<InterfaceAccount<'info, Mint>>,
 
-    /// Anyone can liquidate (permissionless — earns 3% as incentive)
+    /// Anyone can liquidate (permissionless — earns the liquidator's 2/3
+    /// share of liquidation_fee_bps as incentive; the remaining 1/3 goes
+    /// to treasury).
     pub liquidator: Signer<'info>,
 
     pub token_program: Interface<'info, TokenInterface>,
@@ -322,15 +334,43 @@ pub fn handle_liquidate_position(ctx: Context<LiquidatePosition>) -> Result<()> 
         AnemoneError::AboveMaintenanceMargin
     );
 
-    // Liquidation fee on the MtM collateral (not the stale field).
-    let fee = (collateral_mtm as u128)
+    // Liquidation fee on the MtM collateral (not the stale field). Total
+    // fee is `liquidation_fee_bps` (default 3% on MVP). Split 1:2 between
+    // treasury and liquidator — 1/3 to treasury (≈1%), 2/3 to liquidator
+    // (≈2%). Liquidator still gets the bulk as MEV incentive; treasury
+    // captures the protocol's cut.
+    let total_fee = (collateral_mtm as u128)
         .checked_mul(protocol_state.liquidation_fee_bps as u128)
         .and_then(|v| v.checked_div(10_000))
         .ok_or(AnemoneError::MathOverflow)? as u64;
-    let remainder = collateral_mtm.checked_sub(fee).ok_or(AnemoneError::MathOverflow)?;
+    let treasury_share = total_fee / 3;
+    let liquidator_share = total_fee
+        .checked_sub(treasury_share)
+        .ok_or(AnemoneError::MathOverflow)?;
+    let remainder = collateral_mtm
+        .checked_sub(total_fee)
+        .ok_or(AnemoneError::MathOverflow)?;
 
-    // Transfer fee to liquidator
-    if fee > 0 {
+    // Transfer treasury share
+    if treasury_share > 0 {
+        transfer_checked(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                TransferChecked {
+                    from: ctx.accounts.collateral_vault.to_account_info(),
+                    to: ctx.accounts.treasury.to_account_info(),
+                    authority: ctx.accounts.market.to_account_info(),
+                    mint: ctx.accounts.underlying_mint.to_account_info(),
+                },
+                signer_seeds,
+            ),
+            treasury_share,
+            ctx.accounts.underlying_mint.decimals,
+        )?;
+    }
+
+    // Transfer liquidator share
+    if liquidator_share > 0 {
         transfer_checked(
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
@@ -342,7 +382,7 @@ pub fn handle_liquidate_position(ctx: Context<LiquidatePosition>) -> Result<()> 
                 },
                 signer_seeds,
             ),
-            fee,
+            liquidator_share,
             ctx.accounts.underlying_mint.decimals,
         )?;
     }
@@ -408,8 +448,9 @@ pub fn handle_liquidate_position(ctx: Context<LiquidatePosition>) -> Result<()> 
         .ok_or(AnemoneError::MathOverflow)?;
 
     msg!(
-        "Liquidated: fee={} to liquidator={}, remainder={} to owner={}",
-        fee, ctx.accounts.liquidator.key(), remainder, ctx.accounts.owner.key()
+        "Liquidated: treasury={} liquidator={} remainder={} (liquidator_addr={}, owner={})",
+        treasury_share, liquidator_share, remainder,
+        ctx.accounts.liquidator.key(), ctx.accounts.owner.key()
     );
 
     Ok(())

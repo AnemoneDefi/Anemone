@@ -3,12 +3,19 @@ use anchor_spl::token_interface::{
     Mint, TokenAccount, TokenInterface,
     transfer_checked, TransferChecked,
 };
-use crate::state::{SwapMarket, SwapPosition, PositionStatus};
+use crate::state::{SwapMarket, SwapPosition, PositionStatus, ProtocolState};
 use crate::helpers::{calculate_period_pnl, calculate_maintenance_margin};
 use crate::errors::AnemoneError;
 
 #[derive(Accounts)]
 pub struct SettlePeriod<'info> {
+    #[account(
+        seeds = [b"protocol"],
+        bump = protocol_state.bump,
+        has_one = treasury @ AnemoneError::InvalidVault,
+    )]
+    pub protocol_state: Box<Account<'info, ProtocolState>>,
+
     #[account(
         mut,
         seeds = [b"market", market.underlying_reserve.as_ref(), &market.tenor_seconds.to_le_bytes()],
@@ -31,12 +38,22 @@ pub struct SettlePeriod<'info> {
     )]
     pub lp_vault: Box<InterfaceAccount<'info, TokenAccount>>,
 
-    /// Collateral vault — holds trader margin
+    /// Collateral vault — holds trader margin and the protocol-fee source
     #[account(
         mut,
         address = market.collateral_vault @ AnemoneError::InvalidVault,
     )]
     pub collateral_vault: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    /// Treasury — receives the per-period protocol fee on the spread leg.
+    /// Same address as `protocol_state.treasury`; mint must match the
+    /// market's underlying mint.
+    #[account(
+        mut,
+        token::mint = underlying_mint,
+        address = protocol_state.treasury @ AnemoneError::InvalidVault,
+    )]
+    pub treasury: Box<InterfaceAccount<'info, TokenAccount>>,
 
     /// The underlying token mint (e.g. USDC) — needed for transfer_checked
     #[account(
@@ -267,6 +284,53 @@ pub fn handle_settle_period(ctx: Context<SettlePeriod>) -> Result<()> {
     position.next_settlement_ts = now
         .checked_add(settlement_period_seconds)
         .ok_or(AnemoneError::MathOverflow)?;
+
+    // Protocol performance fee on the spread leg (Finding 11 follow-up).
+    // The spread was paid by the trader as part of fixed_payment regardless
+    // of which direction the variable rate moved this period. We tax 10%
+    // (per protocol_state.protocol_fee_bps) of that spread payment and
+    // route it to the treasury, deducted from the trader's collateral.
+    //
+    // spread_payment = notional × spread_bps × elapsed / (year × 10_000)
+    // protocol_fee   = spread_payment × protocol_fee_bps / 10_000
+    //
+    // Capped by `collateral_remaining` so a near-liquidation position does
+    // not overdraw — they will be liquidated in the next call anyway.
+    let spread_bps_at_open = position.spread_bps_at_open;
+    let position_notional = position.notional;
+    const SECONDS_PER_YEAR: u128 = 31_536_000;
+    let spread_payment: u64 = (position_notional as u128)
+        .checked_mul(spread_bps_at_open as u128)
+        .and_then(|v| v.checked_mul(elapsed as u128))
+        .and_then(|v| v.checked_div(10_000_u128.checked_mul(SECONDS_PER_YEAR)?))
+        .ok_or(AnemoneError::MathOverflow)? as u64;
+    let protocol_fee: u64 = (spread_payment as u128)
+        .checked_mul(ctx.accounts.protocol_state.protocol_fee_bps as u128)
+        .and_then(|v| v.checked_div(10_000))
+        .ok_or(AnemoneError::MathOverflow)? as u64;
+    let actual_protocol_fee = protocol_fee.min(position.collateral_remaining);
+    if actual_protocol_fee > 0 {
+        transfer_checked(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                TransferChecked {
+                    from: ctx.accounts.collateral_vault.to_account_info(),
+                    to: ctx.accounts.treasury.to_account_info(),
+                    authority: ctx.accounts.market.to_account_info(),
+                    mint: ctx.accounts.underlying_mint.to_account_info(),
+                },
+                signer_seeds,
+            ),
+            actual_protocol_fee,
+            ctx.accounts.underlying_mint.decimals,
+        )?;
+        let position = &mut ctx.accounts.swap_position;
+        position.collateral_remaining = position.collateral_remaining
+            .checked_sub(actual_protocol_fee)
+            .ok_or(AnemoneError::MathOverflow)?;
+    }
+
+    let position = &mut ctx.accounts.swap_position;
 
     // 7. Check maturity
     if now >= position.maturity_timestamp {

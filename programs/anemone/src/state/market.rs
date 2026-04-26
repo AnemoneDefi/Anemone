@@ -51,7 +51,6 @@ pub struct SwapMarket {
     pub previous_rate_update_ts: i64,
     pub current_rate_index: u128,
     pub last_rate_update_ts: i64,
-    pub cumulative_fees_earned: u64,
     pub total_open_positions: u64,
     pub total_kamino_collateral: u64,
 
@@ -93,7 +92,6 @@ impl SwapMarket {
         + 8    // previous_rate_update_ts
         + 16   // current_rate_index
         + 8    // last_rate_update_ts
-        + 8    // cumulative_fees_earned
         + 8    // total_open_positions
         + 8    // total_kamino_collateral
         + 8    // last_kamino_snapshot_usdc
