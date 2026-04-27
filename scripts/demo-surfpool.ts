@@ -492,7 +492,7 @@ async function main() {
     .withdrawFromKamino(new anchor.BN(JIT_WITHDRAW_K_USDC))
     .accountsStrict({
       protocolState: protocolStatePda,
-      caller: deployer.publicKey,
+      keeper: deployer.publicKey,
       market: marketPda,
       lpVault: lpVaultPda,
       kaminoDepositAccount: kaminoDepositPda,
@@ -511,13 +511,16 @@ async function main() {
 
   const beforeSettleColl = await getAccount(connection, collateralVaultPda);
   const beforeSettleLp = await getAccount(connection, lpVaultPda);
+  const beforeSettleTreasury = await getAccount(connection, deployerUsdcAta);
   const tx11 = await program.methods
     .settlePeriod()
     .accountsStrict({
+      protocolState: protocolStatePda,
       market: marketPda,
       swapPosition: swapPositionPda,
       lpVault: lpVaultPda,
       collateralVault: collateralVaultPda,
+      treasury: deployerUsdcAta,
       underlyingMint: USDC_MINT,
       caller: deployer.publicKey,
       tokenProgram: TOKEN_PROGRAM_ID,
@@ -526,8 +529,10 @@ async function main() {
     .rpc();
   const afterSettleColl = await getAccount(connection, collateralVaultPda);
   const afterSettleLp = await getAccount(connection, lpVaultPda);
+  const afterSettleTreasury = await getAccount(connection, deployerUsdcAta);
   const positionAfterSettle = await program.account.swapPosition.fetch(swapPositionPda);
 
+  const treasuryDelta = Number(afterSettleTreasury.amount) - Number(beforeSettleTreasury.amount);
   console.log(`  tx: ${tx11}`);
   console.log(
     `  collateral_vault:     ${Number(beforeSettleColl.amount) / 1e6} → ${Number(afterSettleColl.amount) / 1e6} USDC`,
@@ -537,6 +542,10 @@ async function main() {
   );
   console.log(`  num_settlements:      ${positionAfterSettle.numSettlements}`);
   console.log(`  collateral_remaining: ${positionAfterSettle.collateralRemaining.toNumber() / 1e6} USDC`);
+  console.log(`  treasury delta (A.9): +${treasuryDelta} raw units (= protocol_fee on spread leg)`);
+  if (treasuryDelta < 0) {
+    throw new Error(`A.9: treasury delta should be >= 0, got ${treasuryDelta}`);
+  }
 
   // ---------------------------------------------------------------------------
   header("Phase 12 — close_position_early (internal Kamino redeem on shortfall)");
@@ -554,6 +563,7 @@ async function main() {
   const beforeCloseTrader = await getAccount(connection, traderUsdcAta);
   const beforeCloseTreasury = await getAccount(connection, deployerUsdcAta);
   const beforeCloseLp = await getAccount(connection, lpVaultPda);
+  const beforeCloseSnapshot = (await program.account.swapMarket.fetch(marketPda)).lastKaminoSnapshotUsdc;
 
   const tx12 = await program.methods
     .closePositionEarly()
@@ -603,6 +613,18 @@ async function main() {
   console.log(
     `  treasury USDC:     ${Number(beforeCloseTreasury.amount) / 1e6} → ${Number(afterCloseTreasury.amount) / 1e6}`,
   );
+  // A.11.a — assert snapshot tracking on close_position_early
+  const afterCloseSnapshot = (await program.account.swapMarket.fetch(marketPda)).lastKaminoSnapshotUsdc;
+  const closeLpDelta = Number(afterCloseLp.amount) - Number(beforeCloseLp.amount);
+  const closeSnapshotDelta = afterCloseSnapshot.sub(beforeCloseSnapshot).toNumber();
+  console.log(`  last_kamino_snapshot_usdc: ${beforeCloseSnapshot.toString()} → ${afterCloseSnapshot.toString()} (A.11.a)`);
+  if (closeLpDelta >= 0 && closeSnapshotDelta !== 0) {
+    throw new Error(`A.11.a: lp_vault not drained (no CPI fired) but snapshot changed by ${closeSnapshotDelta}`);
+  }
+  if (closeLpDelta < 0 && closeSnapshotDelta >= 0) {
+    throw new Error(`A.11.a: CPI fired (lp_vault delta=${closeLpDelta}) but snapshot did not decrement`);
+  }
+  console.log(`  ✓ A.11.a: snapshot consistent with internal-CPI fire (delta=${closeSnapshotDelta})`);
 
   // ---------------------------------------------------------------------------
   // Phases 13-17: claim_matured flow on a fresh short-tenor market.
@@ -836,10 +858,12 @@ async function main() {
   const tx16 = await program.methods
     .settlePeriod()
     .accountsStrict({
+      protocolState: protocolStatePda,
       market: shortMarketPda,
       swapPosition: shortSwapPositionPda,
       lpVault: shortLpVaultPda,
       collateralVault: shortCollateralVaultPda,
+      treasury: deployerUsdcAta,
       underlyingMint: USDC_MINT,
       caller: deployer.publicKey,
       tokenProgram: TOKEN_PROGRAM_ID,
@@ -868,6 +892,7 @@ async function main() {
   const collateralBeforeClaim = await getAccount(connection, shortCollateralVaultPda);
   const lpBeforeClaim = await getAccount(connection, shortLpVaultPda);
   const kBeforeClaim = await getAccount(connection, shortKaminoDepositPda);
+  const beforeClaimSnapshot = (await program.account.swapMarket.fetch(shortMarketPda)).lastKaminoSnapshotUsdc;
 
   const tx17 = await program.methods
     .claimMatured()
@@ -915,6 +940,18 @@ async function main() {
     console.log(`  ✓ Internal Kamino redeem fired atomically inside claim_matured`);
   }
 
+  // A.11.b — assert snapshot tracking on claim_matured CPI redeem
+  const afterClaimSnapshot = (await program.account.swapMarket.fetch(shortMarketPda)).lastKaminoSnapshotUsdc;
+  const claimSnapshotDelta = afterClaimSnapshot.sub(beforeClaimSnapshot).toNumber();
+  console.log(`  last_kamino_snapshot_usdc: ${beforeClaimSnapshot.toString()} → ${afterClaimSnapshot.toString()} (A.11.b)`);
+  if (kaminoDrained > 0 && claimSnapshotDelta >= 0) {
+    throw new Error(`A.11.b: CPI fired (drained ${kaminoDrained}) but snapshot did not decrement (delta=${claimSnapshotDelta})`);
+  }
+  if (kaminoDrained === 0 && claimSnapshotDelta !== 0) {
+    throw new Error(`A.11.b: CPI did not fire but snapshot changed by ${claimSnapshotDelta}`);
+  }
+  console.log(`  ✓ A.11.b: snapshot decremented by ${-claimSnapshotDelta} raw USDC (CPI delivered ${kaminoDrained} k-USDC)`);
+
   // ---------------------------------------------------------------------------
   header("Phase 18 — withdraw_from_kamino (REAL CPI: k-USDC → USDC)");
 
@@ -930,7 +967,7 @@ async function main() {
     .withdrawFromKamino(new anchor.BN(kAmount.toString()))
     .accountsStrict({
       protocolState: protocolStatePda,
-      caller: deployer.publicKey,
+      keeper: deployer.publicKey,
       market: marketPda,
       lpVault: lpVaultPda,
       kaminoDepositAccount: kaminoDepositPda,
@@ -957,6 +994,328 @@ async function main() {
     `  lp_vault:               ${Number(beforeWithdrawLpVault.amount) / 1e6} → ${Number(afterWithdrawLpVault.amount) / 1e6} USDC`,
   );
 
+  // ===========================================================================
+  // Suite A — security-hardening tests (Phases 19+)
+  // Each phase is an isolated assertion against a defense added in PRs #28-31.
+  // Negative tests must revert with the exact error name; positive tests must
+  // succeed and update state as expected.
+  //
+  // Skipped on Surfpool (covered by anchor tests): A.2.a (same-tx rotation
+  // reject) — needs update_rate_index, which overflows on Surfpool's slot
+  // drift in refresh_reserve. Anchor tests already exercise the static
+  // fixture path.
+  // ===========================================================================
+
+  // ---------------------------------------------------------------------------
+  header("Phase 19 — A.1.b: update_rate_index rejected for non-keeper");
+
+  {
+    const intruder = Keypair.generate();
+    const sig = await connection.requestAirdrop(intruder.publicKey, 1e9);
+    await connection.confirmTransaction(sig, "confirmed");
+
+    let reverted = false;
+    try {
+      await program.methods
+        .updateRateIndex()
+        .accountsStrict({
+          protocolState: protocolStatePda,
+          market: marketPda,
+          kaminoReserve: KAMINO_USDC_RESERVE,
+          keeper: intruder.publicKey,
+        })
+        .signers([intruder])
+        .rpc();
+    } catch (err) {
+      reverted = true;
+      const msg = String(err);
+      if (!msg.includes("InvalidAuthority")) {
+        throw new Error(`A.1.b: expected InvalidAuthority, got: ${msg.slice(0, 200)}`);
+      }
+      console.log(`  ✓ rejected with InvalidAuthority`);
+    }
+    if (!reverted) throw new Error("A.1.b: update_rate_index should have reverted for non-keeper");
+  }
+
+  // ---------------------------------------------------------------------------
+  header("Phase 20 — A.4.b: withdraw_from_kamino rejected for non-keeper");
+
+  {
+    const intruder = Keypair.generate();
+    const sig = await connection.requestAirdrop(intruder.publicKey, 1e9);
+    await connection.confirmTransaction(sig, "confirmed");
+
+    let reverted = false;
+    try {
+      await program.methods
+        .withdrawFromKamino(new anchor.BN(1_000_000))
+        .accountsStrict({
+          protocolState: protocolStatePda,
+          keeper: intruder.publicKey,
+          market: marketPda,
+          lpVault: lpVaultPda,
+          kaminoDepositAccount: kaminoDepositPda,
+          kaminoReserve: KAMINO_USDC_RESERVE,
+          kaminoLendingMarket: lendingMarket,
+          kaminoLendingMarketAuthority: lendingMarketAuthority,
+          reserveLiquidityMint: USDC_MINT,
+          reserveLiquiditySupply: reserveLiquiditySupply,
+          reserveCollateralMint: reserveCollateralMint,
+          collateralTokenProgram: TOKEN_PROGRAM_ID,
+          liquidityTokenProgram: TOKEN_PROGRAM_ID,
+          instructionSysvarAccount: INSTRUCTIONS_SYSVAR,
+          kaminoProgram: KAMINO_PROGRAM,
+        })
+        .signers([intruder])
+        .rpc();
+    } catch (err) {
+      reverted = true;
+      const msg = String(err);
+      if (!msg.includes("InvalidAuthority")) {
+        throw new Error(`A.4.b: expected InvalidAuthority, got: ${msg.slice(0, 200)}`);
+      }
+      console.log(`  ✓ rejected with InvalidAuthority`);
+    }
+    if (!reverted) throw new Error("A.4.b: withdraw_from_kamino should have reverted for non-keeper");
+  }
+
+  // ---------------------------------------------------------------------------
+  header("Phase 21 — A.6: MIN_NOTIONAL boundary on open_swap");
+
+  {
+    const NONCE_REJECT = 10;
+    const NONCE_ACCEPT = 11;
+    const [posReject] = PublicKey.findProgramAddressSync(
+      [Buffer.from("swap"), trader.publicKey.toBuffer(), marketPda.toBuffer(), Buffer.from([NONCE_REJECT])],
+      program.programId,
+    );
+    const [posAccept] = PublicKey.findProgramAddressSync(
+      [Buffer.from("swap"), trader.publicKey.toBuffer(), marketPda.toBuffer(), Buffer.from([NONCE_ACCEPT])],
+      program.programId,
+    );
+
+    let reverted = false;
+    try {
+      await program.methods
+        .openSwap({ payFixed: {} } as any, new anchor.BN(9_999_999), NONCE_REJECT, MAX_RATE_BPS, MIN_RATE_BPS)
+        .accountsStrict({
+          protocolState: protocolStatePda,
+          market: marketPda,
+          swapPosition: posReject,
+          collateralVault: collateralVaultPda,
+          treasury: deployerUsdcAta,
+          underlyingMint: USDC_MINT,
+          traderTokenAccount: traderUsdcAta,
+          trader: trader.publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([trader])
+        .rpc();
+    } catch (err) {
+      reverted = true;
+      const msg = String(err);
+      if (!msg.includes("InvalidAmount")) {
+        throw new Error(`A.6.a: expected InvalidAmount, got: ${msg.slice(0, 200)}`);
+      }
+      console.log(`  ✓ A.6.a: notional 9_999_999 rejected with InvalidAmount`);
+    }
+    if (!reverted) throw new Error("A.6.a: should have reverted on dust notional");
+
+    await program.methods
+      .openSwap({ payFixed: {} } as any, new anchor.BN(10_000_000), NONCE_ACCEPT, MAX_RATE_BPS, MIN_RATE_BPS)
+      .accountsStrict({
+        protocolState: protocolStatePda,
+        market: marketPda,
+        swapPosition: posAccept,
+        collateralVault: collateralVaultPda,
+        treasury: deployerUsdcAta,
+        underlyingMint: USDC_MINT,
+        traderTokenAccount: traderUsdcAta,
+        trader: trader.publicKey,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      })
+      .signers([trader])
+      .rpc();
+    const positionA6 = await program.account.swapPosition.fetch(posAccept);
+    console.log(`  ✓ A.6.b: notional 10_000_000 accepted; position notional=${positionA6.notional.toString()}`);
+  }
+
+  // ---------------------------------------------------------------------------
+  header("Phase 22 — A.8: pause_market matrix (a, b, c, g, f)");
+
+  {
+    // A.8.a — admin pause flips status 0→1
+    await program.methods
+      .pauseMarket()
+      .accountsStrict({
+        protocolState: protocolStatePda,
+        market: marketPda,
+        authority: deployer.publicKey,
+      })
+      .rpc();
+    let m = await program.account.swapMarket.fetch(marketPda);
+    if (m.status !== 1) throw new Error(`A.8.a: expected status=1, got ${m.status}`);
+    console.log(`  ✓ A.8.a: market paused, status=${m.status}`);
+
+    // A.8.b — open_swap on paused reverts
+    const NONCE_PAUSED = 20;
+    const [posPaused] = PublicKey.findProgramAddressSync(
+      [Buffer.from("swap"), trader.publicKey.toBuffer(), marketPda.toBuffer(), Buffer.from([NONCE_PAUSED])],
+      program.programId,
+    );
+    let openReverted = false;
+    try {
+      await program.methods
+        .openSwap({ payFixed: {} } as any, new anchor.BN(10_000_000), NONCE_PAUSED, MAX_RATE_BPS, MIN_RATE_BPS)
+        .accountsStrict({
+          protocolState: protocolStatePda,
+          market: marketPda,
+          swapPosition: posPaused,
+          collateralVault: collateralVaultPda,
+          treasury: deployerUsdcAta,
+          underlyingMint: USDC_MINT,
+          traderTokenAccount: traderUsdcAta,
+          trader: trader.publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([trader])
+        .rpc();
+    } catch (err) {
+      openReverted = true;
+      const msg = String(err);
+      if (!msg.includes("MarketPaused")) {
+        throw new Error(`A.8.b: expected MarketPaused, got: ${msg.slice(0, 200)}`);
+      }
+      console.log(`  ✓ A.8.b: open_swap on paused rejected with MarketPaused`);
+    }
+    if (!openReverted) throw new Error("A.8.b: open_swap should have reverted on paused market");
+
+    // A.8.c — deposit_liquidity on paused reverts
+    let depositReverted = false;
+    try {
+      await program.methods
+        .depositLiquidity(new anchor.BN(1_000_000))
+        .accountsStrict({
+          protocolState: protocolStatePda,
+          market: marketPda,
+          lpPosition: lpPositionPda,
+          lpVault: lpVaultPda,
+          lpMint: lpMintPda,
+          underlyingMint: USDC_MINT,
+          depositorTokenAccount: deployerUsdcAta,
+          depositorLpTokenAccount: deployerLpAta,
+          depositor: deployer.publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+    } catch (err) {
+      depositReverted = true;
+      const msg = String(err);
+      if (!msg.includes("MarketPaused")) {
+        throw new Error(`A.8.c: expected MarketPaused, got: ${msg.slice(0, 200)}`);
+      }
+      console.log(`  ✓ A.8.c: deposit_liquidity on paused rejected with MarketPaused`);
+    }
+    if (!depositReverted) throw new Error("A.8.c: deposit_liquidity should have reverted on paused market");
+
+    // A.8.g — pause_market from non-admin reverts
+    const intruder = Keypair.generate();
+    const sig = await connection.requestAirdrop(intruder.publicKey, 1e9);
+    await connection.confirmTransaction(sig, "confirmed");
+    let pauseReverted = false;
+    try {
+      await program.methods
+        .pauseMarket()
+        .accountsStrict({
+          protocolState: protocolStatePda,
+          market: marketPda,
+          authority: intruder.publicKey,
+        })
+        .signers([intruder])
+        .rpc();
+    } catch (err) {
+      pauseReverted = true;
+      const msg = String(err);
+      if (!msg.includes("InvalidAuthority")) {
+        throw new Error(`A.8.g: expected InvalidAuthority, got: ${msg.slice(0, 200)}`);
+      }
+      console.log(`  ✓ A.8.g: pause_market from non-admin rejected with InvalidAuthority`);
+    }
+    if (!pauseReverted) throw new Error("A.8.g: pause_market non-admin should have reverted");
+
+    // A.8.f — unpause restores status 1→0
+    await program.methods
+      .unpauseMarket()
+      .accountsStrict({
+        protocolState: protocolStatePda,
+        market: marketPda,
+        authority: deployer.publicKey,
+      })
+      .rpc();
+    m = await program.account.swapMarket.fetch(marketPda);
+    if (m.status !== 0) throw new Error(`A.8.f: expected status=0, got ${m.status}`);
+    console.log(`  ✓ A.8.f: market unpaused, status=${m.status}`);
+  }
+
+  // ---------------------------------------------------------------------------
+  header("Phase 23 — A.3: open_swap rejects when snapshots collapse (apy=0)");
+
+  // MUST run last in Suite A — leaves snapshots intentionally collapsed.
+  {
+    const collapsed = new anchor.BN("9999999999999999999");
+    await program.methods
+      .setRateIndexOracle(collapsed)
+      .accountsStrict({ protocolState: protocolStatePda, market: marketPda, authority: deployer.publicKey })
+      .rpc();
+    await program.methods
+      .setRateIndexOracle(collapsed)
+      .accountsStrict({ protocolState: protocolStatePda, market: marketPda, authority: deployer.publicKey })
+      .rpc();
+
+    const m = await program.account.swapMarket.fetch(marketPda);
+    if (m.previousRateIndex.toString() !== m.currentRateIndex.toString()) {
+      throw new Error(`A.3 setup: snapshots not collapsed; previous=${m.previousRateIndex} current=${m.currentRateIndex}`);
+    }
+    console.log(`  snapshots collapsed: previous == current == ${m.currentRateIndex.toString()}`);
+
+    const NONCE = 30;
+    const [pos] = PublicKey.findProgramAddressSync(
+      [Buffer.from("swap"), trader.publicKey.toBuffer(), marketPda.toBuffer(), Buffer.from([NONCE])],
+      program.programId,
+    );
+    let reverted = false;
+    try {
+      await program.methods
+        .openSwap({ payFixed: {} } as any, new anchor.BN(10_000_000), NONCE, MAX_RATE_BPS, MIN_RATE_BPS)
+        .accountsStrict({
+          protocolState: protocolStatePda,
+          market: marketPda,
+          swapPosition: pos,
+          collateralVault: collateralVaultPda,
+          treasury: deployerUsdcAta,
+          underlyingMint: USDC_MINT,
+          traderTokenAccount: traderUsdcAta,
+          trader: trader.publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+        })
+        .signers([trader])
+        .rpc();
+    } catch (err) {
+      reverted = true;
+      const msg = String(err);
+      if (!msg.includes("RateIndexNotInitialized")) {
+        throw new Error(`A.3: expected RateIndexNotInitialized, got: ${msg.slice(0, 200)}`);
+      }
+      console.log(`  ✓ A.3: open_swap rejected with RateIndexNotInitialized`);
+    }
+    if (!reverted) throw new Error("A.3: open_swap should have reverted on collapsed snapshots");
+  }
+
   console.log(`\n=== Demo complete: full Anemone lifecycle on Surfpool ===`);
   console.log(`  Real Kamino CPI:   deposit_to_kamino + withdraw_from_kamino ✓`);
   console.log(`  Real Kamino read:  cumulative_borrow_rate_bsf decoded from live Reserve ✓`);
@@ -968,6 +1327,7 @@ async function main() {
   console.log(`  Maturity flow:     short-tenor market → settle → claim_matured exercises`);
   console.log(`                     internal redeem with empty lp_vault ✓`);
   console.log(`  Stub-oracle write: rate index seeded via set_rate_index_oracle (devnet path)`);
+  console.log(`  Suite A defenses:  A.1.b, A.3, A.4.b, A.6, A.8, A.9 verified on live Kamino fork ✓`);
 }
 
 main().catch((err) => {
