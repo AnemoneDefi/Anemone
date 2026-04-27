@@ -1,10 +1,10 @@
 use anchor_lang::prelude::*;
 use crate::state::SwapMarket;
+use crate::errors::AnemoneError;
 #[cfg(not(feature = "stub-oracle"))]
 use {
     anchor_spl::token_interface::{TokenAccount, TokenInterface},
     kamino_lend::state::Reserve,
-    crate::errors::AnemoneError,
     crate::helpers::{cpi_refresh_reserve, read_kamino_collateral_to_liquidity},
 };
 
@@ -133,18 +133,15 @@ pub fn handle_sync_kamino_yield(ctx: Context<SyncKaminoYield>) -> Result<()> {
         our_k_balance,
     )?;
 
-    // 3. Credit the yield delta to lp_nav. Saturating sub: if the value went
-    //    DOWN since last snapshot (Kamino bad debt event), we don't subtract
-    //    from lp_nav — that would burn LP shares for an event the LP didn't
-    //    cause. The protocol absorbs the loss silently in this case; admin
-    //    response is to halt new positions and investigate.
+    // 3. Credit the yield delta to lp_nav (see apply_yield_delta for the
+    //    bad-debt saturating_sub rationale).
     let market = &mut ctx.accounts.market;
-    let delta = kamino_value_usdc.saturating_sub(market.last_kamino_snapshot_usdc);
-    if delta > 0 {
-        market.lp_nav = market.lp_nav
-            .checked_add(delta)
-            .ok_or(AnemoneError::MathOverflow)?;
-    }
+    let (new_lp_nav, delta) = apply_yield_delta(
+        market.lp_nav,
+        market.last_kamino_snapshot_usdc,
+        kamino_value_usdc,
+    )?;
+    market.lp_nav = new_lp_nav;
     market.last_kamino_snapshot_usdc = kamino_value_usdc;
     market.last_kamino_sync_ts = Clock::get()?.unix_timestamp;
 
@@ -153,4 +150,82 @@ pub fn handle_sync_kamino_yield(ctx: Context<SyncKaminoYield>) -> Result<()> {
         kamino_value_usdc, delta,
     );
     Ok(())
+}
+
+/// Pure helper extracted from `handle_sync_kamino_yield` so the bad-debt
+/// branch can be unit-tested without mocking Anchor accounts.
+///
+/// Returns `(new_lp_nav, credited_delta)`:
+/// - When `kamino_value > last_snapshot`, credits the delta to `lp_nav`.
+/// - When `kamino_value <= last_snapshot` (Kamino bad-debt event), returns
+///   `lp_nav` unchanged. Saturating sub means we don't burn LP shares for
+///   an event the LP didn't cause — the protocol absorbs the loss silently
+///   and admin response is to halt new positions and investigate.
+///
+/// Available in both stub-oracle and mainnet builds so cargo tests run
+/// uniformly.
+pub fn apply_yield_delta(
+    lp_nav: u64,
+    last_snapshot: u64,
+    kamino_value: u64,
+) -> Result<(u64, u64)> {
+    let delta = kamino_value.saturating_sub(last_snapshot);
+    let new_lp_nav = if delta > 0 {
+        lp_nav.checked_add(delta).ok_or(AnemoneError::MathOverflow)?
+    } else {
+        lp_nav
+    };
+    Ok((new_lp_nav, delta))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normal_yield_credits_delta() {
+        // lp_nav=1000, snapshot was 1000, kamino now 1050 → +50 yield
+        let (nav, delta) = apply_yield_delta(1_000, 1_000, 1_050).unwrap();
+        assert_eq!(nav, 1_050);
+        assert_eq!(delta, 50);
+    }
+
+    #[test]
+    fn bad_debt_does_not_decrement_lp_nav() {
+        // Kamino reports lower value than our last snapshot — bad-debt event.
+        // saturating_sub returns 0, lp_nav stays at 1000 (NOT 950).
+        let (nav, delta) = apply_yield_delta(1_000, 1_000, 950).unwrap();
+        assert_eq!(nav, 1_000, "lp_nav must stay unchanged on negative delta");
+        assert_eq!(delta, 0, "credited delta must be 0 on bad-debt path");
+    }
+
+    #[test]
+    fn zero_change_returns_zero_delta() {
+        let (nav, delta) = apply_yield_delta(1_000, 1_000, 1_000).unwrap();
+        assert_eq!(nav, 1_000);
+        assert_eq!(delta, 0);
+    }
+
+    #[test]
+    fn overflow_returns_error() {
+        // lp_nav near u64::MAX + a positive delta would overflow.
+        let result = apply_yield_delta(u64::MAX - 10, 0, 100);
+        assert!(result.is_err(), "checked_add must reject overflow");
+    }
+
+    #[test]
+    fn massive_yield_credits_correctly() {
+        // 1_000_000_000 USDC delta — well within u64 range
+        let (nav, delta) = apply_yield_delta(5_000_000_000, 5_000_000_000, 6_000_000_000).unwrap();
+        assert_eq!(nav, 6_000_000_000);
+        assert_eq!(delta, 1_000_000_000);
+    }
+
+    #[test]
+    fn first_sync_from_zero_credits_full_kamino_value() {
+        // Edge case: first sync after initialization, lp_nav = 0
+        let (nav, delta) = apply_yield_delta(0, 0, 1_000).unwrap();
+        assert_eq!(nav, 1_000);
+        assert_eq!(delta, 1_000);
+    }
 }
