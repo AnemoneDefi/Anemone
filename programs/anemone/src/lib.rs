@@ -59,6 +59,14 @@ pub mod anemone {
         instructions::admin::pause_protocol::handle_unpause_protocol(ctx)
     }
 
+    pub fn pause_market(ctx: Context<PauseMarket>) -> Result<()> {
+        instructions::admin::pause_market::handle_pause_market(ctx)
+    }
+
+    pub fn unpause_market(ctx: Context<PauseMarket>) -> Result<()> {
+        instructions::admin::pause_market::handle_unpause_market(ctx)
+    }
+
     /// Admin-only stub for clusters where Kamino K-Lend is not deployed
     /// (localnet/devnet). Feature-gated so mainnet builds do NOT include it —
     /// see [features] in programs/anemone/Cargo.toml. On mainnet, rate index

@@ -3,8 +3,9 @@ use anchor_spl::token_interface::{
     Mint, TokenAccount, TokenInterface,
     transfer_checked, TransferChecked,
 };
+use kamino_lend::state::Reserve;
 use crate::state::{SwapMarket, SwapPosition, SwapDirection, PositionStatus, ProtocolState};
-use crate::helpers::{calculate_period_pnl, cpi_withdraw_from_kamino};
+use crate::helpers::{calculate_period_pnl, cpi_withdraw_from_kamino, read_kamino_liquidity_to_collateral};
 use crate::errors::AnemoneError;
 
 #[derive(Accounts)]
@@ -86,9 +87,15 @@ pub struct ClosePositionEarly<'info> {
     )]
     pub kamino_deposit_account: Box<InterfaceAccount<'info, TokenAccount>>,
 
-    /// CHECK: Validated by Kamino program during CPI
-    #[account(mut)]
-    pub kamino_reserve: AccountInfo<'info>,
+    /// Kamino reserve — typed as AccountLoader so the handler can read the
+    /// live exchange rate to convert USDC shortfall into k-USDC collateral
+    /// before invoking `redeem_reserve_collateral` (Finding 10 fix).
+    #[account(
+        mut,
+        constraint = kamino_reserve.key() == market.underlying_reserve
+            @ AnemoneError::InvalidReserve,
+    )]
+    pub kamino_reserve: AccountLoader<'info, Reserve>,
 
     /// CHECK: Validated by Kamino program during CPI
     pub kamino_lending_market: AccountInfo<'info>,
@@ -164,38 +171,52 @@ pub fn handle_close_position_early(ctx: Context<ClosePositionEarly>) -> Result<(
 
     // 1b. Internal Kamino redeem on shortfall (mirror of claim_matured).
     //     Total potential drain on lp_vault = unpaid_pnl + max(pnl, 0).
-    //     If lp_vault has less, redeem the difference from Kamino now so the
-    //     trader's close is atomic — no need for a separate keeper-side or
-    //     trader-bundled `withdraw_from_kamino` call.
+    //     If lp_vault has less, redeem the difference from Kamino so the
+    //     trader's close is atomic — no separate keeper-side rebalance.
+    //
+    //     Finding 10 fix: convert USDC shortfall → k-USDC via reserve's
+    //     live exchange rate (was passing USDC as collateral_amount,
+    //     over-redeeming by 1/exchange_rate). Cap at actual k-USDC held;
+    //     if the cap binds, the transfers below leave a residual that the
+    //     final UnpaidPnlOutstanding check rejects, deferring the close.
     let total_lp_drain: u64 = (position.unpaid_pnl.max(0) as u64)
         .checked_add(pnl.max(0) as u64)
         .ok_or(AnemoneError::MathOverflow)?;
     let lp_vault_balance = ctx.accounts.lp_vault.amount;
     let mut kamino_redeemed_usdc: u64 = 0;
     if total_lp_drain > lp_vault_balance {
-        let shortfall_k = total_lp_drain.saturating_sub(lp_vault_balance);
-        let lp_vault_before_cpi = ctx.accounts.lp_vault.amount;
-        cpi_withdraw_from_kamino(
-            &ctx.accounts.kamino_program,
-            &ctx.accounts.market.to_account_info(),
-            signer_seeds,
+        let shortfall_usdc = total_lp_drain - lp_vault_balance;
+        let computed_k = read_kamino_liquidity_to_collateral(
             &ctx.accounts.kamino_reserve,
-            &ctx.accounts.kamino_lending_market,
-            &ctx.accounts.kamino_lending_market_authority,
-            &ctx.accounts.reserve_liquidity_mint.to_account_info(),
-            &ctx.accounts.reserve_liquidity_supply,
-            &ctx.accounts.reserve_collateral_mint,
-            &ctx.accounts.kamino_deposit_account.to_account_info(),
-            &ctx.accounts.lp_vault.to_account_info(),
-            &ctx.accounts.collateral_token_program.to_account_info(),
-            &ctx.accounts.liquidity_token_program.to_account_info(),
-            &ctx.accounts.instruction_sysvar_account,
-            shortfall_k,
+            shortfall_usdc,
         )?;
-        ctx.accounts.lp_vault.reload()?;
-        ctx.accounts.kamino_deposit_account.reload()?;
-        kamino_redeemed_usdc = ctx.accounts.lp_vault.amount
-            .saturating_sub(lp_vault_before_cpi);
+        let max_held_k = ctx.accounts.kamino_deposit_account.amount;
+        let actual_redeem_k = computed_k.min(max_held_k);
+
+        if actual_redeem_k > 0 {
+            let lp_vault_before_cpi = ctx.accounts.lp_vault.amount;
+            cpi_withdraw_from_kamino(
+                &ctx.accounts.kamino_program,
+                &ctx.accounts.market.to_account_info(),
+                signer_seeds,
+                &ctx.accounts.kamino_reserve.to_account_info(),
+                &ctx.accounts.kamino_lending_market,
+                &ctx.accounts.kamino_lending_market_authority,
+                &ctx.accounts.reserve_liquidity_mint.to_account_info(),
+                &ctx.accounts.reserve_liquidity_supply,
+                &ctx.accounts.reserve_collateral_mint,
+                &ctx.accounts.kamino_deposit_account.to_account_info(),
+                &ctx.accounts.lp_vault.to_account_info(),
+                &ctx.accounts.collateral_token_program.to_account_info(),
+                &ctx.accounts.liquidity_token_program.to_account_info(),
+                &ctx.accounts.instruction_sysvar_account,
+                actual_redeem_k,
+            )?;
+            ctx.accounts.lp_vault.reload()?;
+            ctx.accounts.kamino_deposit_account.reload()?;
+            kamino_redeemed_usdc = ctx.accounts.lp_vault.amount
+                .saturating_sub(lp_vault_before_cpi);
+        }
     }
 
     // 2a. H1 catchup on existing unpaid_pnl before booking new MtM. Closing

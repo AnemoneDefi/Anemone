@@ -23,6 +23,12 @@ pub struct SwapPosition {
     pub direction: SwapDirection,
     pub notional: u64,
     pub fixed_rate_bps: u64,
+    /// Spread component locked into `fixed_rate_bps` at open time. The
+    /// quoted rate is `current_apy_bps ± spread_bps`; storing the spread
+    /// separately lets `settle_period` charge the protocol fee against the
+    /// deterministic spread payment regardless of which direction the
+    /// variable rate moved (Finding 11 follow-up — protocol_fee_bps wiring).
+    pub spread_bps_at_open: u64,
 
     // Collateral
     pub collateral_deposited: u64,
@@ -65,6 +71,7 @@ impl SwapPosition {
         + 1    // direction (enum)
         + 8    // notional
         + 8    // fixed_rate_bps
+        + 8    // spread_bps_at_open
         + 8    // collateral_deposited
         + 8    // collateral_remaining
         + 16   // entry_rate_index
