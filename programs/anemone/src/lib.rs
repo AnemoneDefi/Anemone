@@ -67,11 +67,13 @@ pub mod anemone {
         instructions::admin::pause_market::handle_unpause_market(ctx)
     }
 
-    /// Admin-only stub for clusters where Kamino K-Lend is not deployed
-    /// (localnet/devnet). Feature-gated so mainnet builds do NOT include it —
-    /// see [features] in programs/anemone/Cargo.toml. On mainnet, rate index
-    /// comes exclusively from `update_rate_index` reading Kamino state.
-    #[cfg(feature = "stub-oracle")]
+    /// Admin-only utility for clusters where Kamino K-Lend is not deployed
+    /// (localnet/devnet) and for surfpool E2E that need to drive rate-index
+    /// state to specific values (e.g. organic-liquidation tests). Feature-
+    /// gated so mainnet builds do NOT include it — see [features] in
+    /// programs/anemone/Cargo.toml. On mainnet, rate index comes exclusively
+    /// from `update_rate_index` reading Kamino state.
+    #[cfg(feature = "dev-tools")]
     pub fn set_rate_index_oracle(
         ctx: Context<SetRateIndexOracle>,
         rate_index: u128,
