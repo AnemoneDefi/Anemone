@@ -173,8 +173,8 @@ UPGRADE_AUTHORITY=<SQUADS_ADDRESS> yarn deploy:mainnet
 
 ---
 
-## Program
+## Program ID
 
-| Network | Program ID |
-|---------|-----------|
-| Mainnet | `KQs6ci5FtedFKPVJThAZSMMXyosK4TvnF7kcDSx5Jwd` |
+`KQs6ci5FtedFKPVJThAZSMMXyosK4TvnF7kcDSx5Jwd`
+
+This is the program keypair declared in `Anchor.toml` under `[programs.localnet]` and `[programs.devnet]`. It's used for localnet, devnet, and the surfpool mainnet-fork test environment. **Not yet deployed to mainnet.** The mainnet deployment will reuse the same keypair (Anchor convention) — this README will be updated with a confirmed mainnet status once that happens.
