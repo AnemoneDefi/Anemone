@@ -159,20 +159,6 @@ yarn ts-node scripts/setup-surfpool.ts
 
 ---
 
-## Deploying
-
-`scripts/deploy.sh` enforces guardrails — refuses mainnet deploy unless `UPGRADE_AUTHORITY` is set to a multisig (Squads or equivalent). Refuses to ship a build that contains the `setRateIndexOracle` instruction (would mean `dev-tools` or `stub-oracle` leaked into production).
-
-```bash
-# Devnet (single-sig OK for iteration)
-ALLOW_SINGLE_SIG=1 yarn deploy:devnet
-
-# Mainnet (multisig required)
-UPGRADE_AUTHORITY=<SQUADS_ADDRESS> yarn deploy:mainnet
-```
-
----
-
 ## Program ID
 
 `KQs6ci5FtedFKPVJThAZSMMXyosK4TvnF7kcDSx5Jwd`
