@@ -19,7 +19,12 @@ name = "anemone"
 # or the `build:mainnet` npm script. See deploy checklist in
 # docs/security-remediation-plan.md §Fase 5.
 default = ["stub-oracle"]
-stub-oracle = []
+stub-oracle = ["dev-tools"]
+# `dev-tools` exposes admin-only utilities that are useful in test/dev
+# environments but do not belong in mainnet (currently: set_rate_index_oracle).
+# Implied by stub-oracle. E2E builds against a Kamino-real fork (surfpool)
+# enable this WITHOUT stub-oracle so the real Kamino CPI path stays active.
+dev-tools = []
 cpi = ["no-entrypoint"]
 no-entrypoint = []
 no-idl = []
