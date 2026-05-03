@@ -131,12 +131,16 @@ async function main() {
     console.log(`  ${fakeKaminoCollateralMint.publicKey.toBase58()}\n`);
   }
 
-  // Treasury = deployer's USDC ATA on the real mint (will exist when needed).
-  // For initialize_protocol we just need a token account address; the program
-  // doesn't write to it during init — only later in open_swap.
-  // Use a deterministic placeholder address since we won't touch it in this
-  // smoke test.
-  const treasuryPlaceholder = deployer.publicKey;
+  // Treasury must be an SPL token account on the underlying mint (program
+  // validates owner == TOKEN_PROGRAM_ID since the per-market protocol fee
+  // skim added in PR #32 actually writes to it). Use the deployer's USDC
+  // ATA — the bootstrap doesn't deposit USDC, so the ATA may need to be
+  // created beforehand by the SDK E2E or via setTokenBalance.
+  const { getAssociatedTokenAddressSync } = await import("@solana/spl-token");
+  const treasuryPlaceholder = getAssociatedTokenAddressSync(
+    USDC_MINT,
+    deployer.publicKey,
+  );
 
   // ----- initialize_protocol
   console.log("--- initialize_protocol");
@@ -194,8 +198,10 @@ async function main() {
   const tx1 = await program.methods
     .updateRateIndex()
     .accountsStrict({
+      protocolState: protocolStatePda,
       market: marketPda,
       kaminoReserve: KAMINO_USDC_RESERVE,
+      keeper: deployer.publicKey,
     })
     .rpc();
   console.log(`  tx: ${tx1}`);
@@ -212,8 +218,10 @@ async function main() {
   const tx2 = await program.methods
     .updateRateIndex()
     .accountsStrict({
+      protocolState: protocolStatePda,
       market: marketPda,
       kaminoReserve: KAMINO_USDC_RESERVE,
+      keeper: deployer.publicKey,
     })
     .rpc();
   console.log(`  tx: ${tx2}`);
