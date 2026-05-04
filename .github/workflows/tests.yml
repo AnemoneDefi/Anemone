@@ -56,9 +56,8 @@ jobs:
       - name: Restore Cargo registry from S3
         run: |
           KEY="cargo-registry-${{ hashFiles('**/Cargo.lock') }}"
-          FALLBACK="cargo-registry-"
-          aws s3 sync "s3://$S3_CACHE_BUCKET/cache/$KEY" ~/.cargo/registry/ 2>/dev/null || \
-          aws s3 sync "s3://$S3_CACHE_BUCKET/cache/$FALLBACK" ~/.cargo/registry/ 2>/dev/null || \
+          aws s3 sync "s3://$S3_CACHE_BUCKET/cache/$KEY/cache" ~/.cargo/registry/cache --quiet 2>/dev/null && \
+          aws s3 sync "s3://$S3_CACHE_BUCKET/cache/$KEY/index" ~/.cargo/registry/index --quiet 2>/dev/null || \
           echo "No Cargo registry cache found — will build from scratch"
 
       - name: Restore program build artifacts from S3
@@ -138,35 +137,34 @@ jobs:
       - name: Run tests
         run: anchor test --skip-build
 
-      # Save caches to S3 only on push to main to avoid cache poisoning from PRs
+      # Save caches to S3 only on merge to main
       - name: Save Cargo registry to S3
         if: github.event_name == 'push'
         run: |
           KEY="cargo-registry-${{ hashFiles('**/Cargo.lock') }}"
-          aws s3 sync ~/.cargo/registry/ "s3://$S3_CACHE_BUCKET/cache/$KEY" \
-            --exclude "*.tmp" --no-progress
+          aws s3 sync ~/.cargo/registry/cache "s3://$S3_CACHE_BUCKET/cache/$KEY/cache" --quiet
+          aws s3 sync ~/.cargo/registry/index "s3://$S3_CACHE_BUCKET/cache/$KEY/index" --quiet
 
       - name: Save program build artifacts to S3
         if: github.event_name == 'push'
         run: |
           KEY="cargo-target-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', 'programs/**/*.rs') }}"
           aws s3 sync target/ "s3://$S3_CACHE_BUCKET/cache/$KEY" \
-            --exclude "*.tmp" --no-progress
+            --exclude "*.tmp" --quiet
 
       - name: Save SBF platform-tools to S3
         if: github.event_name == 'push'
         run: |
           KEY="sbf-tools-${{ env.SBF_TOOLS_VERSION }}"
-          aws s3 sync ~/.cache/solana/ "s3://$S3_CACHE_BUCKET/cache/$KEY/solana" --no-progress
+          aws s3 sync ~/.cache/solana/ "s3://$S3_CACHE_BUCKET/cache/$KEY/solana" --quiet
           aws s3 sync \
             ~/.rustup/toolchains/1.89.0-sbpf-solana-${{ env.SBF_TOOLS_VERSION }}/ \
-            "s3://$S3_CACHE_BUCKET/cache/$KEY/rustup" --no-progress
+            "s3://$S3_CACHE_BUCKET/cache/$KEY/rustup" --quiet
 
       - name: Save Anchor CLI to S3
         if: >
-          github.ref == 'refs/heads/main' &&
           github.event_name == 'push' &&
           steps.restore-anchor.outputs.cache-hit != 'true'
         run: |
           aws s3 cp ~/.cargo/bin/anchor \
-            "s3://$S3_CACHE_BUCKET/cache/anchor-cli-${{ env.ANCHOR_VERSION }}/anchor"
+            "s3://$S3_CACHE_BUCKET/cache/anchor-cli-${{ env.ANCHOR_VERSION }}/anchor" --quiet
