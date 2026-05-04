@@ -9,6 +9,12 @@ env:
   SOLANA_VERSION: "v3.1.13"
   ANCHOR_VERSION: "0.31.1"
   SBF_TOOLS_VERSION: "v1.52"
+  S3_CACHE_BUCKET: ${{ secrets.S3_CACHE_BUCKET }}
+  AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-2' }}
+
+permissions:
+  id-token: write   # required for OIDC token exchange
+  contents: read
 
 jobs:
   test:
@@ -17,26 +23,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: AnemoneCI-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
       # Rust toolchain is read from rust-toolchain.toml (1.89.0)
       - name: Setup Rust toolchain
         run: rustup show
 
-      - name: Cache Cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-          key: cargo-registry-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: cargo-registry-
+      - name: Restore Cargo registry from S3
+        run: |
+          KEY="cargo-registry-${{ hashFiles('**/Cargo.lock') }}"
+          FALLBACK="cargo-registry-"
+          aws s3 sync "s3://$S3_CACHE_BUCKET/cache/$KEY" ~/.cargo/registry/ 2>/dev/null || \
+          aws s3 sync "s3://$S3_CACHE_BUCKET/cache/$FALLBACK" ~/.cargo/registry/ 2>/dev/null || \
+          echo "No Cargo registry cache found — will build from scratch"
 
-      - name: Cache program build artifacts
-        uses: actions/cache@v4
-        with:
-          path: target/
-          key: cargo-target-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', 'programs/**/*.rs') }}
-          restore-keys: cargo-target-${{ runner.os }}-
+      - name: Restore program build artifacts from S3
+        run: |
+          KEY="cargo-target-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', 'programs/**/*.rs') }}"
+          FALLBACK="cargo-target-${{ runner.os }}-"
+          aws s3 sync "s3://$S3_CACHE_BUCKET/cache/$KEY" target/ 2>/dev/null || \
+          aws s3 sync "s3://$S3_CACHE_BUCKET/cache/$FALLBACK" target/ 2>/dev/null || \
+          echo "No build artifact cache found — will build from scratch"
 
       - name: Install Solana CLI (Agave ${{ env.SOLANA_VERSION }})
         run: |
@@ -47,13 +59,13 @@ jobs:
       # anchor build calls cargo-build-sbf in a way that tries to reinstall the
       # toolchain using the host cargo (1.84), which fails. Workaround: build
       # manually and run `anchor test --skip-build`.
-      - name: Cache SBF platform-tools ${{ env.SBF_TOOLS_VERSION }}
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/solana/${{ env.SBF_TOOLS_VERSION }}
-            ~/.rustup/toolchains/1.89.0-sbpf-solana-${{ env.SBF_TOOLS_VERSION }}
-          key: sbf-tools-${{ env.SBF_TOOLS_VERSION }}
+      - name: Restore SBF platform-tools from S3
+        run: |
+          KEY="sbf-tools-${{ env.SBF_TOOLS_VERSION }}"
+          aws s3 sync "s3://$S3_CACHE_BUCKET/cache/$KEY/solana" ~/.cache/solana/ 2>/dev/null && \
+          aws s3 sync "s3://$S3_CACHE_BUCKET/cache/$KEY/rustup" \
+            ~/.rustup/toolchains/1.89.0-sbpf-solana-${{ env.SBF_TOOLS_VERSION }}/ 2>/dev/null || \
+          echo "No SBF tools cache found — will install from scratch"
 
       - name: Install SBF platform-tools ${{ env.SBF_TOOLS_VERSION }}
         run: cargo-build-sbf --tools-version ${{ env.SBF_TOOLS_VERSION }} --install-only
@@ -61,15 +73,19 @@ jobs:
       - name: Install system dependencies
         run: sudo apt-get install -y libudev-dev
 
-      - name: Cache Anchor CLI ${{ env.ANCHOR_VERSION }}
-        id: cache-anchor
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/bin/anchor
-          key: anchor-cli-${{ env.ANCHOR_VERSION }}
+      - name: Restore Anchor CLI from S3
+        id: restore-anchor
+        run: |
+          if aws s3 cp "s3://$S3_CACHE_BUCKET/cache/anchor-cli-${{ env.ANCHOR_VERSION }}/anchor" \
+              ~/.cargo/bin/anchor 2>/dev/null; then
+            chmod +x ~/.cargo/bin/anchor
+            echo "cache-hit=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "cache-hit=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Install Anchor CLI ${{ env.ANCHOR_VERSION }}
-        if: steps.cache-anchor.outputs.cache-hit != 'true'
+        if: steps.restore-anchor.outputs.cache-hit != 'true'
         run: cargo install anchor-cli --version ${{ env.ANCHOR_VERSION }} --force
 
       - name: Setup Node.js
@@ -102,3 +118,36 @@ jobs:
 
       - name: Run tests
         run: anchor test --skip-build
+
+      # Save caches to S3 only on push to main to avoid cache poisoning from PRs
+      - name: Save Cargo registry to S3
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: |
+          KEY="cargo-registry-${{ hashFiles('**/Cargo.lock') }}"
+          aws s3 sync ~/.cargo/registry/ "s3://$S3_CACHE_BUCKET/cache/$KEY" \
+            --exclude "*.tmp" --no-progress
+
+      - name: Save program build artifacts to S3
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: |
+          KEY="cargo-target-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', 'programs/**/*.rs') }}"
+          aws s3 sync target/ "s3://$S3_CACHE_BUCKET/cache/$KEY" \
+            --exclude "*.tmp" --no-progress
+
+      - name: Save SBF platform-tools to S3
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        run: |
+          KEY="sbf-tools-${{ env.SBF_TOOLS_VERSION }}"
+          aws s3 sync ~/.cache/solana/ "s3://$S3_CACHE_BUCKET/cache/$KEY/solana" --no-progress
+          aws s3 sync \
+            ~/.rustup/toolchains/1.89.0-sbpf-solana-${{ env.SBF_TOOLS_VERSION }}/ \
+            "s3://$S3_CACHE_BUCKET/cache/$KEY/rustup" --no-progress
+
+      - name: Save Anchor CLI to S3
+        if: >
+          github.ref == 'refs/heads/main' &&
+          github.event_name == 'push' &&
+          steps.restore-anchor.outputs.cache-hit != 'true'
+        run: |
+          aws s3 cp ~/.cargo/bin/anchor \
+            "s3://$S3_CACHE_BUCKET/cache/anchor-cli-${{ env.ANCHOR_VERSION }}/anchor"
