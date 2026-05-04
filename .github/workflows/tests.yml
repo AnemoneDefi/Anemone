@@ -105,7 +105,7 @@ jobs:
       - name: Install Anchor CLI ${{ env.ANCHOR_VERSION }}
         if: steps.restore-anchor.outputs.cache-hit != 'true'
         run: |
-          cargo install --git https://github.com/coral-xyz/avm avm --locked --force
+          cargo install avm --force
           ~/.cargo/bin/avm install ${{ env.ANCHOR_VERSION }}
           ~/.cargo/bin/avm use ${{ env.ANCHOR_VERSION }}
 
