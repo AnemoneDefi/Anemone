@@ -92,11 +92,12 @@ jobs:
       - name: Install system dependencies
         run: sudo apt-get install -y libudev-dev
 
-      - name: Restore Anchor (avm) from S3
+      - name: Restore Anchor CLI from S3
         id: restore-anchor
         run: |
-          if aws s3 sync "s3://$S3_CACHE_BUCKET/cache/anchor-avm-${{ env.ANCHOR_VERSION }}" \
-              ~/.avm 2>/dev/null && [ -f ~/.avm/bin/anchor ]; then
+          if aws s3 cp "s3://$S3_CACHE_BUCKET/cache/anchor-cli-${{ env.ANCHOR_VERSION }}/anchor" \
+              ~/.cargo/bin/anchor 2>/dev/null; then
+            chmod +x ~/.cargo/bin/anchor
             echo "cache-hit=true" >> "$GITHUB_OUTPUT"
           else
             echo "cache-hit=false" >> "$GITHUB_OUTPUT"
@@ -104,13 +105,7 @@ jobs:
 
       - name: Install Anchor CLI ${{ env.ANCHOR_VERSION }}
         if: steps.restore-anchor.outputs.cache-hit != 'true'
-        run: |
-          cargo install avm --force
-          ~/.cargo/bin/avm install ${{ env.ANCHOR_VERSION }}
-          ~/.cargo/bin/avm use ${{ env.ANCHOR_VERSION }}
-
-      - name: Add Anchor to PATH
-        run: echo "$HOME/.avm/bin" >> $GITHUB_PATH
+        run: cargo install anchor-cli --version ${{ env.ANCHOR_VERSION }} --force
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -167,11 +162,11 @@ jobs:
             ~/.rustup/toolchains/1.89.0-sbpf-solana-${{ env.SBF_TOOLS_VERSION }}/ \
             "s3://$S3_CACHE_BUCKET/cache/$KEY/rustup" --no-progress
 
-      - name: Save Anchor (avm) to S3
+      - name: Save Anchor CLI to S3
         if: >
           github.ref == 'refs/heads/main' &&
           github.event_name == 'push' &&
           steps.restore-anchor.outputs.cache-hit != 'true'
         run: |
-          aws s3 sync ~/.avm \
-            "s3://$S3_CACHE_BUCKET/cache/anchor-avm-${{ env.ANCHOR_VERSION }}" --no-progress
+          aws s3 cp ~/.cargo/bin/anchor \
+            "s3://$S3_CACHE_BUCKET/cache/anchor-cli-${{ env.ANCHOR_VERSION }}/anchor"
