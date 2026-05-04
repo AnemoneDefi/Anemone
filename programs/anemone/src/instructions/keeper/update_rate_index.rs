@@ -1,6 +1,5 @@
 use anchor_lang::prelude::*;
-use kamino_lend::state::Reserve;
-use crate::state::{SwapMarket, ProtocolState};
+use crate::state::SwapMarket;
 use crate::helpers::read_kamino_rate_index;
 use crate::errors::AnemoneError;
 
@@ -19,11 +18,15 @@ pub struct UpdateRateIndex<'info> {
     )]
     pub market: Account<'info, SwapMarket>,
 
-    /// Kamino Reserve account — must match what the market was created with.
+    /// Kamino Reserve account — read-only, raw bytes.
+    /// Must match the reserve this market was created with.
+    /// CHECK: We read raw bytes at the known offset for cumulative_borrow_rate_bsf.
+    ///        The address is validated against market.underlying_reserve.
     #[account(
         constraint = kamino_reserve.key() == market.underlying_reserve
             @ AnemoneError::InvalidReserve
     )]
+<<<<<<< HEAD
     pub kamino_reserve: AccountLoader<'info, Reserve>,
 
     /// Layer 1 of the rate-index-collapse defense (see SECURITY.md Finding 2).
@@ -39,6 +42,9 @@ pub struct UpdateRateIndex<'info> {
             @ AnemoneError::InvalidAuthority,
     )]
     pub keeper: Signer<'info>,
+=======
+    pub kamino_reserve: AccountInfo<'info>,
+>>>>>>> 36f5580 (feat: localnet test environment with Kamino cloned from mainnet)
 }
 
 /// Maximum slots a Reserve can be stale before we reject the update (~5 minutes)

@@ -8,9 +8,8 @@
     "deploy:mainnet": "./scripts/deploy.sh"
   },
   "dependencies": {
-    "@coral-xyz/anchor": "^0.32.1",
-    "@solana/spl-token": "^0.4.14",
-    "bs58": "^6.0.0"
+    "@coral-xyz/anchor": "^0.31.1",
+    "@solana/spl-token": "^0.4.14"
   },
   "devDependencies": {
     "@kamino-finance/klend-sdk": "^7.3.22",

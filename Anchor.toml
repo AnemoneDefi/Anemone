@@ -19,6 +19,7 @@ cluster = "localnet"
 wallet = "~/.config/solana/id.json"
 
 [test.validator]
+url = "https://api.mainnet-beta.solana.com"
 bind_address = "127.0.0.1"
 startup_wait = 30000
 
