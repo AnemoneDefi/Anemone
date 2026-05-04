@@ -140,21 +140,21 @@ jobs:
 
       # Save caches to S3 only on push to main to avoid cache poisoning from PRs
       - name: Save Cargo registry to S3
-        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        if: github.event_name == 'push'
         run: |
           KEY="cargo-registry-${{ hashFiles('**/Cargo.lock') }}"
           aws s3 sync ~/.cargo/registry/ "s3://$S3_CACHE_BUCKET/cache/$KEY" \
             --exclude "*.tmp" --no-progress
 
       - name: Save program build artifacts to S3
-        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        if: github.event_name == 'push'
         run: |
           KEY="cargo-target-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', 'programs/**/*.rs') }}"
           aws s3 sync target/ "s3://$S3_CACHE_BUCKET/cache/$KEY" \
             --exclude "*.tmp" --no-progress
 
       - name: Save SBF platform-tools to S3
-        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        if: github.event_name == 'push'
         run: |
           KEY="sbf-tools-${{ env.SBF_TOOLS_VERSION }}"
           aws s3 sync ~/.cache/solana/ "s3://$S3_CACHE_BUCKET/cache/$KEY/solana" --no-progress
