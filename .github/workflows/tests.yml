@@ -58,15 +58,15 @@ jobs:
           KEY="cargo-registry-${{ hashFiles('**/Cargo.lock') }}"
           aws s3 sync "s3://$S3_CACHE_BUCKET/cache/$KEY/cache" ~/.cargo/registry/cache --quiet 2>/dev/null && \
           aws s3 sync "s3://$S3_CACHE_BUCKET/cache/$KEY/index" ~/.cargo/registry/index --quiet 2>/dev/null || \
-          echo "No Cargo registry cache found — will build from scratch"
+          echo "No Cargo registry cache found"
 
       - name: Restore program build artifacts from S3
         run: |
           KEY="cargo-target-${{ runner.os }}-${{ hashFiles('**/Cargo.lock', 'programs/**/*.rs') }}"
           FALLBACK="cargo-target-${{ runner.os }}-"
-          aws s3 sync "s3://$S3_CACHE_BUCKET/cache/$KEY" target/ 2>/dev/null || \
-          aws s3 sync "s3://$S3_CACHE_BUCKET/cache/$FALLBACK" target/ 2>/dev/null || \
-          echo "No build artifact cache found — will build from scratch"
+          aws s3 sync "s3://$S3_CACHE_BUCKET/cache/$KEY" target/ --quiet 2>/dev/null || \
+          aws s3 sync "s3://$S3_CACHE_BUCKET/cache/$FALLBACK" target/ --quiet 2>/dev/null || \
+          echo "No build artifact cache found"
 
       - name: Install Solana CLI (Agave ${{ env.SOLANA_VERSION }})
         run: |
@@ -80,10 +80,10 @@ jobs:
       - name: Restore SBF platform-tools from S3
         run: |
           KEY="sbf-tools-${{ env.SBF_TOOLS_VERSION }}"
-          aws s3 sync "s3://$S3_CACHE_BUCKET/cache/$KEY/solana" ~/.cache/solana/ 2>/dev/null && \
+          aws s3 sync "s3://$S3_CACHE_BUCKET/cache/$KEY/solana" ~/.cache/solana/ --quiet 2>/dev/null && \
           aws s3 sync "s3://$S3_CACHE_BUCKET/cache/$KEY/rustup" \
-            ~/.rustup/toolchains/1.89.0-sbpf-solana-${{ env.SBF_TOOLS_VERSION }}/ 2>/dev/null || \
-          echo "No SBF tools cache found — will install from scratch"
+            ~/.rustup/toolchains/1.89.0-sbpf-solana-${{ env.SBF_TOOLS_VERSION }}/ --quiet 2>/dev/null || \
+          echo "No SBF tools cache found"
 
       - name: Install SBF platform-tools ${{ env.SBF_TOOLS_VERSION }}
         run: cargo-build-sbf --tools-version ${{ env.SBF_TOOLS_VERSION }} --install-only
@@ -95,7 +95,7 @@ jobs:
         id: restore-anchor
         run: |
           if aws s3 cp "s3://$S3_CACHE_BUCKET/cache/anchor-cli-${{ env.ANCHOR_VERSION }}/anchor" \
-              ~/.cargo/bin/anchor 2>/dev/null; then
+              ~/.cargo/bin/anchor --quiet 2>/dev/null; then
             chmod +x ~/.cargo/bin/anchor
             echo "cache-hit=true" >> "$GITHUB_OUTPUT"
           else
