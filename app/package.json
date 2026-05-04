@@ -9,16 +9,30 @@
     "lint": "next lint"
   },
   "dependencies": {
+    "@anemone/sdk": "file:../../SDK",
+    "@coral-xyz/anchor": "^0.32.1",
+    "@kamino-finance/klend-sdk": "^7.3.22",
+    "@solana/spl-token": "^0.4.14",
+    "@solana/wallet-adapter-backpack": "^0.1.14",
+    "@solana/wallet-adapter-phantom": "^0.9.29",
+    "@solana/wallet-adapter-react": "^0.15.39",
+    "@solana/wallet-adapter-react-ui": "^0.9.39",
+    "@solana/wallet-adapter-solflare": "^0.6.33",
+    "@solana/web3.js": "^1.98.4",
+    "buffer": "^6.0.3",
     "next": "^15.0.3",
+    "process": "^0.11.10",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "swr": "^2.4.1"
   },
   "devDependencies": {
     "@types/node": "^22.9.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
-    "typescript": "^5.6.3",
+    "@types/webpack": "^5.28.5",
     "eslint": "^9.14.0",
-    "eslint-config-next": "^15.0.3"
+    "eslint-config-next": "^15.0.3",
+    "typescript": "^5.6.3"
   }
 }

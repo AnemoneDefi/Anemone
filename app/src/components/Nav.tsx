@@ -1,7 +1,16 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+
+const WalletMultiButton = dynamic(
+  () =>
+    import("@solana/wallet-adapter-react-ui").then(
+      (mod) => mod.WalletMultiButton
+    ),
+  { ssr: false }
+);
 
 type NavLink = { href: string; label: string };
 
@@ -37,9 +46,7 @@ export function Nav() {
             <span className="dot-pink" />
             Live on Solana Devnet
           </div>
-          <button className="btn btn-outline-pink" type="button">
-            Connect Wallet
-          </button>
+          <WalletMultiButton />
         </div>
       </div>
     </nav>

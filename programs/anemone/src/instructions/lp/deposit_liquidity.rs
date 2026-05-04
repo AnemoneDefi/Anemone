@@ -1,4 +1,5 @@
 use anchor_lang::prelude::*;
+use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token_interface::{
     Mint, TokenAccount, TokenInterface,
     mint_to, transfer_checked, MintTo, TransferChecked,
@@ -59,11 +60,15 @@ pub struct DepositLiquidity<'info> {
     )]
     pub depositor_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
 
-    /// Depositor's LP token account (receives minted shares)
+    /// Depositor's LP token account (receives minted shares). Auto-init for
+    /// first-time depositors so the frontend doesn't have to bundle a separate
+    /// `createAssociatedTokenAccount` instruction.
     #[account(
-        mut,
-        token::mint = lp_mint,
-        token::authority = depositor,
+        init_if_needed,
+        payer = depositor,
+        associated_token::mint = lp_mint,
+        associated_token::authority = depositor,
+        associated_token::token_program = token_program,
     )]
     pub depositor_lp_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
 
@@ -71,6 +76,7 @@ pub struct DepositLiquidity<'info> {
     pub depositor: Signer<'info>,
 
     pub token_program: Interface<'info, TokenInterface>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
     pub system_program: Program<'info, System>,
 }
 
@@ -160,9 +166,12 @@ pub fn handle_deposit_liquidity(
         lp_position.is_initialized = true;
         lp_position.owner = ctx.accounts.depositor.key();
         lp_position.market = market.key();
-        lp_position.status = LpStatus::Active;
         lp_position.bump = ctx.bumps.lp_position;
     }
+    // Always set status to Active — handles re-deposit after a full withdrawal
+    // that flipped status to Withdrawn. Without this, the lp_position becomes
+    // unwithdrawable on the second deposit.
+    lp_position.status = LpStatus::Active;
     lp_position.shares = lp_position.shares
         .checked_add(shares)
         .ok_or(AnemoneError::MathOverflow)?;
