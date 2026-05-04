@@ -24,8 +24,14 @@ import {
   Keypair,
   Connection,
   SystemProgram,
+  TransactionInstruction,
 } from "@solana/web3.js";
-import { TOKEN_PROGRAM_ID, createMint } from "@solana/spl-token";
+import {
+  TOKEN_PROGRAM_ID,
+  createMint,
+  createAssociatedTokenAccountIdempotent,
+  getAssociatedTokenAddressSync,
+} from "@solana/spl-token";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -133,14 +139,26 @@ async function main() {
 
   // Treasury must be an SPL token account on the underlying mint (program
   // validates owner == TOKEN_PROGRAM_ID since the per-market protocol fee
-  // skim added in PR #32 actually writes to it). Use the deployer's USDC
-  // ATA — the bootstrap doesn't deposit USDC, so the ATA may need to be
-  // created beforehand by the SDK E2E or via setTokenBalance.
-  const { getAssociatedTokenAddressSync } = await import("@solana/spl-token");
+  // skim added in PR #32 writes to it). Use the deployer's USDC ATA —
+  // create it idempotently if it doesn't exist yet, so a fresh surfpool
+  // (no prior USDC interactions on the deployer) can still bootstrap.
   const treasuryPlaceholder = getAssociatedTokenAddressSync(
     USDC_MINT,
     deployer.publicKey,
   );
+  const treasuryAtaInfo = await connection.getAccountInfo(treasuryPlaceholder);
+  if (!treasuryAtaInfo) {
+    console.log("--- creating treasury USDC ATA for deployer");
+    const ata = await createAssociatedTokenAccountIdempotent(
+      connection,
+      deployer,
+      USDC_MINT,
+      deployer.publicKey,
+    );
+    console.log(`  ${ata.toBase58()}\n`);
+  } else {
+    console.log("--- treasury USDC ATA already exists\n");
+  }
 
   // ----- initialize_protocol
   console.log("--- initialize_protocol");
@@ -215,6 +233,31 @@ async function main() {
   await new Promise((r) => setTimeout(r, 3000));
 
   console.log("\n--- update_rate_index (REAL Kamino CPI — second call, rotates previous)");
+  // Surfpool forks Kamino state at a single slot; without refresh_reserve the
+  // `cumulative_borrow_rate_bsf` reads identical on both calls and the program
+  // rejects with InvalidRateIndex. Bundle Kamino's refresh_reserve as a
+  // preInstruction so the bsf advances by real elapsed time.
+  const KAMINO_LENDING_MARKET = new PublicKey(
+    "7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF",
+  );
+  const SCOPE_PRICES = new PublicKey(
+    "3t4JZcueEzTbVP6kLxXrL3VpWx45jDer4eqysweBchNH",
+  );
+  const REFRESH_RESERVE_DISCRIMINATOR = Buffer.from([
+    2, 218, 138, 235, 79, 201, 25, 102,
+  ]);
+  const refreshReserve: TransactionInstruction = new TransactionInstruction({
+    programId: KAMINO_PROGRAM,
+    keys: [
+      { pubkey: KAMINO_USDC_RESERVE, isSigner: false, isWritable: true },
+      { pubkey: KAMINO_LENDING_MARKET, isSigner: false, isWritable: false },
+      { pubkey: KAMINO_PROGRAM, isSigner: false, isWritable: false },
+      { pubkey: KAMINO_PROGRAM, isSigner: false, isWritable: false },
+      { pubkey: KAMINO_PROGRAM, isSigner: false, isWritable: false },
+      { pubkey: SCOPE_PRICES, isSigner: false, isWritable: false },
+    ],
+    data: REFRESH_RESERVE_DISCRIMINATOR,
+  });
   const tx2 = await program.methods
     .updateRateIndex()
     .accountsStrict({
@@ -223,6 +266,7 @@ async function main() {
       kaminoReserve: KAMINO_USDC_RESERVE,
       keeper: deployer.publicKey,
     })
+    .preInstructions([refreshReserve])
     .rpc();
   console.log(`  tx: ${tx2}`);
 
