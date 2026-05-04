@@ -46,7 +46,7 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           role-session-name: AnemoneCI-${{ github.run_id }}
-          aws-region: ${{ env.AWS_REGION }}
+          aws-region: ${{ secrets.AWS_REGION || 'us-east-2' }}
 
       # Rust toolchain is read from rust-toolchain.toml (1.89.0)
       - name: Setup Rust toolchain
