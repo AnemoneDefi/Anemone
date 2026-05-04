@@ -9,6 +9,12 @@ env:
   SOLANA_VERSION: "v3.0.15"
   ANCHOR_VERSION: "0.31.1"
   SBF_TOOLS_VERSION: "v1.52"
+  S3_CACHE_BUCKET: ${{ secrets.S3_CACHE_BUCKET }}
+  AWS_REGION: ${{ secrets.AWS_REGION || 'us-east-2' }}
+
+permissions:
+  id-token: write
+  contents: read
 
 jobs:
   test:
@@ -16,6 +22,13 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: AnemoneCI-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
 
       # Rust toolchain is read from rust-toolchain.toml (1.89.0)
       - name: Setup Rust toolchain
@@ -46,7 +59,6 @@ jobs:
       # anchor build calls cargo-build-sbf in a way that tries to reinstall the
       # toolchain using the host cargo (1.84), which fails. Workaround: build
       # manually and run `anchor test --skip-build`.
-<<<<<<< HEAD
       - name: Restore SBF platform-tools from S3
         run: |
           KEY="sbf-tools-${{ env.SBF_TOOLS_VERSION }}"
@@ -54,15 +66,6 @@ jobs:
           aws s3 sync "s3://$S3_CACHE_BUCKET/cache/$KEY/rustup" \
             ~/.rustup/toolchains/1.89.0-sbpf-solana-${{ env.SBF_TOOLS_VERSION }}/ 2>/dev/null || \
           echo "No SBF tools cache found — will install from scratch"
-=======
-      - name: Cache SBF platform-tools ${{ env.SBF_TOOLS_VERSION }}
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/solana/${{ env.SBF_TOOLS_VERSION }}
-            ~/.rustup/toolchains/1.89.0-sbpf-solana-${{ env.SBF_TOOLS_VERSION }}
-          key: sbf-tools-${{ env.SBF_TOOLS_VERSION }}
->>>>>>> main
 
       - name: Install SBF platform-tools ${{ env.SBF_TOOLS_VERSION }}
         run: cargo-build-sbf --tools-version ${{ env.SBF_TOOLS_VERSION }} --install-only
