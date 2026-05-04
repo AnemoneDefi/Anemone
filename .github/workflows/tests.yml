@@ -67,6 +67,7 @@ jobs:
           aws s3 sync "s3://$S3_CACHE_BUCKET/cache/$KEY" target/ --quiet 2>/dev/null || \
           aws s3 sync "s3://$S3_CACHE_BUCKET/cache/$FALLBACK" target/ --quiet 2>/dev/null || \
           echo "No build artifact cache found"
+          find target/ -type f -name "build-script-build" -exec chmod +x {} + 2>/dev/null || true
 
       - name: Install Solana CLI (Agave ${{ env.SOLANA_VERSION }})
         run: |
