@@ -708,3 +708,45 @@
   font-family: 'JetBrains Mono', monospace;
   letter-spacing: 0.02em;
 }
+
+/* Tx state hints (Day 26 wiring) */
+.errorBanner {
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  color: #fca5a5;
+  padding: 10px 14px;
+  font-size: 12px;
+  border-radius: 8px;
+  font-family: 'JetBrains Mono', monospace;
+  letter-spacing: 0.02em;
+  margin: 12px 0;
+  word-break: break-word;
+}
+
+.successBanner {
+  background: rgba(34, 197, 94, 0.06);
+  border: 1px solid rgba(34, 197, 94, 0.3);
+  color: #86efac;
+  padding: 10px 14px;
+  font-size: 12px;
+  border-radius: 8px;
+  font-family: 'JetBrains Mono', monospace;
+  letter-spacing: 0.02em;
+  margin: 12px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.successBanner a { color: inherit; text-decoration: underline; word-break: break-all; }
+
+.emptyState {
+  padding: 56px 24px;
+  text-align: center;
+  color: var(--text-2);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+}

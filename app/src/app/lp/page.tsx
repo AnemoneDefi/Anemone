@@ -1,47 +1,161 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import {
+  useAnchorWallet,
+  useConnection,
+  useWallet,
+} from "@solana/wallet-adapter-react";
+import { PublicKey, type TransactionInstruction } from "@solana/web3.js";
+import {
+  createAssociatedTokenAccountIdempotentInstruction,
+  getAssociatedTokenAddressSync,
+} from "@solana/spl-token";
+import type { Market, LpPosition, Protocol } from "@anemone/sdk";
 import { Nav } from "@/components/Nav";
 import { Footer } from "@/components/Footer";
 import { RevealOnScroll } from "@/components/RevealOnScroll";
+import {
+  useMarkets,
+  useMarket,
+  useLpPosition,
+  useProtocol,
+} from "@/lib/hooks";
+import { useTokenBalance } from "@/lib/balance";
+import { buildClient } from "@/lib/anemone";
+import {
+  resolveKaminoCpiAccounts,
+  buildRefreshReserveIx,
+  KAMINO_USDC_LENDING_MARKET,
+  KAMINO_SCOPE_PRICES,
+  KAMINO_PROGRAM_ID,
+} from "@/lib/kamino";
+import {
+  calculateApyBps,
+  formatApy,
+  formatBps,
+  formatUsdc,
+  formatUsdcCompact,
+  utilizationPct,
+} from "@/lib/format";
 import s from "./lp.module.css";
 
-function PoolStrip() {
+const USDC_DECIMALS = 6;
+const USDC_DIVISOR = 10n ** BigInt(USDC_DECIMALS);
+
+function parseUsdcInput(value: string): bigint | null {
+  const trimmed = value.replace(/,/g, "").trim();
+  if (!trimmed) return null;
+  if (!/^\d+(\.\d{0,6})?$/.test(trimmed)) return null;
+  const [whole, frac = ""] = trimmed.split(".");
+  const fracPadded = (frac + "000000").slice(0, USDC_DECIMALS);
+  try {
+    return BigInt(whole) * USDC_DIVISOR + BigInt(fracPadded);
+  } catch {
+    return null;
+  }
+}
+
+function explorerTxUrl(signature: string): string {
+  const network = process.env.NEXT_PUBLIC_NETWORK || "surfpool";
+  if (network === "mainnet") {
+    return `https://explorer.solana.com/tx/${signature}`;
+  }
+  if (network === "devnet") {
+    return `https://explorer.solana.com/tx/${signature}?cluster=devnet`;
+  }
+  return `https://explorer.solana.com/tx/${signature}?cluster=custom&customUrl=${encodeURIComponent(
+    process.env.NEXT_PUBLIC_RPC_URL || "http://127.0.0.1:8899"
+  )}`;
+}
+
+function timeAgo(unixSec: bigint | null): string {
+  if (unixSec == null || unixSec === 0n) return "—";
+  const now = BigInt(Math.floor(Date.now() / 1000));
+  const diff = Number(now - unixSec);
+  if (diff < 60) return `${diff}s ago`;
+  if (diff < 3_600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86_400) return `${Math.floor(diff / 3_600)}h ago`;
+  return `${Math.floor(diff / 86_400)}d ago`;
+}
+
+// ─── PoolStrip ─────────────────────────────────────────────────────────────
+
+function PoolStrip({ market }: { market: Market | null | undefined }) {
+  if (!market) {
+    return (
+      <div className={s.poolStrip}>
+        <div className={`wrap ${s.poolStripWrap}`}>
+          <span className={s.psStatKey} style={{ padding: "20px 0" }}>
+            {market === null ? "Market not found on this RPC" : "Loading market…"}
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  const elapsed =
+    market.lastRateUpdateTs > market.previousRateUpdateTs
+      ? market.lastRateUpdateTs - market.previousRateUpdateTs
+      : 0n;
+  const baseApyBps = calculateApyBps(
+    market.previousRateIndex,
+    market.currentRateIndex,
+    elapsed
+  );
+  const spreadBps = BigInt(market.baseSpreadBps);
+  const estimatedApyBps = baseApyBps + spreadBps;
+
+  const totalNotional = market.totalFixedNotional + market.totalVariableNotional;
+  const util = utilizationPct(totalNotional, market.lpNav);
+
+  const payShare =
+    market.totalFixedNotional + market.totalVariableNotional === 0n
+      ? 50
+      : Math.round(
+          Number((market.totalFixedNotional * 100n) /
+            (market.totalFixedNotional + market.totalVariableNotional))
+        );
+  const recvShare = 100 - payShare;
+  const direction =
+    Math.abs(payShare - 50) <= 5 ? "Balanced" : payShare > 50 ? "Pay-heavy" : "Recv-heavy";
+
   return (
     <div className={s.poolStrip}>
       <div className={`wrap ${s.poolStripWrap}`}>
         <button className={s.mktSelect} type="button">
           <span className={s.mkDot}>K</span>
-          <span>Kamino USDC Pool · 30D tenor</span>
+          <span>Kamino USDC Pool · {Number(market.tenorSeconds) / 86_400}D tenor</span>
           <span className={s.chev}>▾</span>
         </button>
         <div className={s.vDiv} />
         <div className={s.psStat}>
           <span className={s.psStatKey}>TVL</span>
-          <span className={s.psStatValue}>$2.4M</span>
+          <span className={s.psStatValue}>{formatUsdcCompact(market.lpNav)}</span>
         </div>
         <div className={s.psStat}>
           <span className={s.psStatKey}>Estimated APY</span>
-          <span className={`${s.psStatValue} ${s.pink}`}>9.3%</span>
+          <span className={`${s.psStatValue} ${s.pink}`}>{formatBps(estimatedApyBps)}</span>
         </div>
         <div className={s.psStat}>
           <span className={s.psStatKey}>Kamino base</span>
           <span className={s.psStatValue}>
-            <span className={s.dotBlue} />6.8%
+            <span className={s.dotBlue} />{formatBps(baseApyBps)}
           </span>
         </div>
         <div className={s.psStat}>
           <span className={s.psStatKey}>Spread yield</span>
           <span className={s.psStatValue}>
-            <span className={s.dotPinkStatic} />2.5%
+            <span className={s.dotPinkStatic} />{formatBps(spreadBps)}
           </span>
         </div>
         <div className={s.psStat}>
           <span className={s.psStatKey}>Utilization</span>
           <div className={s.utilMini}>
-            <span className={s.psStatValue} style={{ fontSize: 14 }}>34%</span>
+            <span className={s.psStatValue} style={{ fontSize: 14 }}>{util}%</span>
             <span className={s.utilBar}>
-              <span className={s.utilBarFill} style={{ width: "34%" }} />
+              <span className={s.utilBarFill} style={{ width: `${util}%` }} />
             </span>
           </div>
         </div>
@@ -49,24 +163,26 @@ function PoolStrip() {
           <span className={s.psStatKey}>Pool direction</span>
           <div className={s.utilMini}>
             <span className={s.dirBar}>
-              <span className={s.dirBarPay} style={{ width: "55%" }} />
-              <span className={s.dirBarReceive} style={{ width: "45%" }} />
+              <span className={s.dirBarPay} style={{ width: `${payShare}%` }} />
+              <span className={s.dirBarReceive} style={{ width: `${recvShare}%` }} />
             </span>
-            <span className={s.psStatValue} style={{ fontSize: 13 }}>Balanced</span>
+            <span className={s.psStatValue} style={{ fontSize: 13 }}>{direction}</span>
           </div>
         </div>
         <div className={s.psRight}>
-          <span>Last settlement 2h ago</span>
+          <span>Last rate update {timeAgo(market.lastRateUpdateTs)}</span>
           <span>·</span>
           <span>
             <span className="dot-pink" style={{ animationDuration: "2.4s" }} />
-            Keeper online
+            Live on-chain
           </span>
         </div>
       </div>
     </div>
   );
 }
+
+// ─── Hero / charts (kept mocked per partner spec) ──────────────────────────
 
 function HeroChart() {
   const W = 720, H = 200, PADL = 44, PADR = 16, PADT = 8, PADB = 26;
@@ -162,7 +278,7 @@ function Hero() {
         <div className={s.apyHero}>
           <div className={s.apyChartCol}>
             <div className={s.apyChartHead}>
-              <span className={s.apyEyebrow}>Realized APY · Last 30 Days</span>
+              <span className={s.apyEyebrow}>Realized APY · Last 30 Days (mock — historical indexer pending)</span>
               <div className={s.apyToggle}>
                 <button className={s.apyTg} type="button">7D</button>
                 <button className={`${s.apyTg} ${s.active}`} type="button">30D</button>
@@ -197,24 +313,226 @@ function Hero() {
   );
 }
 
-function DepositCard() {
-  const [tab, setTab] = useState<"deposit" | "withdraw">("deposit");
-  const share = 9847.23;
+// ─── DepositCard ───────────────────────────────────────────────────────────
+
+type Tab = "deposit" | "withdraw";
+
+interface DepositCardProps {
+  market: Market | null | undefined;
+  protocol: Protocol | null | undefined;
+  lpPosition: LpPosition | null | undefined;
+  refresh: () => void;
+}
+
+function DepositCard({ market, protocol, lpPosition, refresh }: DepositCardProps) {
+  const [tab, setTab] = useState<Tab>("deposit");
+  const [amount, setAmount] = useState("");
+  const [shares, setShares] = useState("");
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [signature, setSignature] = useState<string | null>(null);
+
+  const wallet = useWallet();
+  const anchorWallet = useAnchorWallet();
+  const { connection } = useConnection();
+
+  const { data: usdcBalance } = useTokenBalance(
+    wallet.publicKey?.toBase58(),
+    market?.underlyingMint
+  );
+  const { data: lpBalance } = useTokenBalance(
+    wallet.publicKey?.toBase58(),
+    market?.lpMint
+  );
+
+  const reset = () => {
+    setError(null);
+    setSignature(null);
+  };
+
+  const handleQuickPick = (pct: number | "max") => {
+    if (tab === "deposit") {
+      const balance = usdcBalance ?? 0n;
+      const value = pct === "max" ? balance : (balance * BigInt(pct)) / 100n;
+      setAmount(formatUsdc(value, { withSymbol: false, maxFractionDigits: 6 }));
+    } else {
+      const balance = lpBalance ?? 0n;
+      const value = pct === "max" ? balance : (balance * BigInt(pct)) / 100n;
+      setShares(formatUsdc(value, { withSymbol: false, maxFractionDigits: 6 }));
+    }
+  };
+
+  const previewSharesFromAmount = useMemo<bigint | null>(() => {
+    if (!market) return null;
+    const amt = parseUsdcInput(amount);
+    if (amt == null) return null;
+    if (market.totalLpShares === 0n || market.lpNav === 0n) return amt;
+    return (amt * market.totalLpShares) / market.lpNav;
+  }, [amount, market]);
+
+  const previewUsdcFromShares = useMemo<bigint | null>(() => {
+    if (!market) return null;
+    const sh = parseUsdcInput(shares);
+    if (sh == null) return null;
+    if (market.totalLpShares === 0n) return 0n;
+    const gross = (sh * market.lpNav) / market.totalLpShares;
+    const feeBps = BigInt(protocol?.withdrawalFeeBps ?? 0);
+    const fee = (gross * feeBps) / 10_000n;
+    return gross - fee;
+  }, [shares, market, protocol]);
+
+  const handleDeposit = async () => {
+    if (!anchorWallet || !market) return;
+    const amt = parseUsdcInput(amount);
+    if (amt == null || amt <= 0n) {
+      setError("Enter a valid USDC amount.");
+      return;
+    }
+    if (usdcBalance != null && amt > usdcBalance) {
+      setError(
+        `Amount exceeds wallet balance ($${formatUsdc(usdcBalance, { withSymbol: false })} USDC available).`
+      );
+      return;
+    }
+    reset();
+    setPending(true);
+    try {
+      const client = buildClient(anchorWallet);
+      const lpMint = new PublicKey(market.lpMint);
+      const marketPda = new PublicKey(market.publicKey);
+      const reserve = new PublicKey(market.underlyingReserve);
+      const kaminoDepositAccount = new PublicKey(market.kaminoDepositAccount);
+      const preInstructions: TransactionInstruction[] = [];
+
+      // 1. createATA(lp_mint, depositor) — defensive (program also has
+      //    init_if_needed). Idempotent.
+      const lpAta = getAssociatedTokenAddressSync(lpMint, anchorWallet.publicKey);
+      const ataInfo = await connection.getAccountInfo(lpAta);
+      if (!ataInfo) {
+        preInstructions.push(
+          createAssociatedTokenAccountIdempotentInstruction(
+            anchorWallet.publicKey,
+            lpAta,
+            anchorWallet.publicKey,
+            lpMint
+          )
+        );
+      }
+
+      // 2. Bundle refresh_reserve + sync_kamino_yield so deposit_liquidity's
+      //    MAX_NAV_STALENESS_SECS gate passes. In production the keeper bot
+      //    runs sync every 5 min, but in dev the user is the keeper.
+      preInstructions.push(buildRefreshReserveIx(reserve));
+      const syncIx = await client.program.methods
+        .syncKaminoYield()
+        .accountsStrict({
+          market: marketPda,
+          kaminoReserve: reserve,
+          kaminoDepositAccount,
+          kaminoLendingMarket: KAMINO_USDC_LENDING_MARKET,
+          // Reserve uses Scope only — pass kaminoProgram as placeholder for
+          // pyth/switchboard slots (per SyncKaminoYield doc).
+          pythOracle: KAMINO_PROGRAM_ID,
+          switchboardPriceOracle: KAMINO_PROGRAM_ID,
+          switchboardTwapOracle: KAMINO_PROGRAM_ID,
+          scopePrices: KAMINO_SCOPE_PRICES,
+          kaminoProgram: KAMINO_PROGRAM_ID,
+          tokenProgram: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
+        })
+        .instruction();
+      preInstructions.push(syncIx);
+
+      const result = await client.lp.depositLiquidity.execute({
+        depositor: anchorWallet.publicKey,
+        market: marketPda,
+        underlyingMint: new PublicKey(market.underlyingMint),
+        lpMint,
+        lpVault: new PublicKey(market.lpVault),
+        amount: amt,
+        preInstructions,
+      });
+      setSignature(result.signature);
+      setAmount("");
+      refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPending(false);
+    }
+  };
+
+  const handleWithdraw = async () => {
+    if (!anchorWallet || !market || !protocol) return;
+    const sh = parseUsdcInput(shares);
+    if (sh == null || sh <= 0n) {
+      setError("Enter a valid share amount.");
+      return;
+    }
+    if (lpBalance != null && sh > lpBalance) {
+      setError(
+        `Shares exceed your LP token balance (${formatUsdc(lpBalance, { withSymbol: false })} aUSDC available).`
+      );
+      return;
+    }
+    reset();
+    setPending(true);
+    try {
+      const kamino = await resolveKaminoCpiAccounts(
+        connection,
+        new PublicKey(market.underlyingReserve)
+      );
+      const client = buildClient(anchorWallet);
+      const result = await client.lp.requestWithdrawal.execute({
+        withdrawer: anchorWallet.publicKey,
+        market: new PublicKey(market.publicKey),
+        underlyingMint: new PublicKey(market.underlyingMint),
+        lpMint: new PublicKey(market.lpMint),
+        lpVault: new PublicKey(market.lpVault),
+        treasury: new PublicKey(protocol.treasury),
+        sharesToBurn: sh,
+        kaminoReserve: new PublicKey(market.underlyingReserve),
+        kaminoLendingMarket: kamino.kaminoLendingMarket,
+        kaminoLendingMarketAuthority: kamino.kaminoLendingMarketAuthority,
+        reserveLiquidityMint: new PublicKey(market.underlyingMint),
+        reserveLiquiditySupply: kamino.reserveLiquiditySupply,
+        reserveCollateralMint: kamino.reserveCollateralMint,
+        // Surfpool/mainnet: USDC + Kamino k-tokens are SPL Token (not Token-2022).
+        // For Token-2022 underlyings these need to come from market state.
+        collateralTokenProgram: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
+        liquidityTokenProgram: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
+      });
+      setSignature(result.signature);
+      setShares("");
+      refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPending(false);
+    }
+  };
+
+  const isDeposit = tab === "deposit";
+  const balance = isDeposit ? usdcBalance : lpBalance;
+  const balanceLabel = isDeposit ? "USDC" : "aUSDC";
+  const inputValue = isDeposit ? amount : shares;
+  const setInputValue = isDeposit ? setAmount : setShares;
+  const hasWallet = !!wallet.publicKey;
+  const canSubmit =
+    hasWallet && !!market && !pending && !!parseUsdcInput(inputValue);
 
   return (
     <div className={`${s.card} ${s.depCard} reveal`}>
-      <div className={s.staleBanner}>Pool NAV sync required — will auto-include in transaction.</div>
       <div className={s.depTabs}>
         <button
           className={`${s.depTab} ${tab === "deposit" ? s.active : ""}`}
-          onClick={() => setTab("deposit")}
+          onClick={() => { setTab("deposit"); reset(); }}
           type="button"
         >
           Deposit
         </button>
         <button
           className={`${s.depTab} ${tab === "withdraw" ? s.active : ""}`}
-          onClick={() => setTab("withdraw")}
+          onClick={() => { setTab("withdraw"); reset(); }}
           type="button"
         >
           Withdraw
@@ -222,65 +540,122 @@ function DepositCard() {
       </div>
       <div className={s.depBody}>
         <div className={s.depRow}>
-          <span className="eyebrow" style={{ display: "block", marginBottom: 10 }}>Amount</span>
+          <span className="eyebrow" style={{ display: "block", marginBottom: 10 }}>
+            {isDeposit ? "Amount" : "Shares to burn"}
+          </span>
           <div className={s.amountBox}>
-            <span className="prefix">$</span>
-            <input defaultValue="10,000" />
-            <span className="suffix">USDC</span>
+            <span className="prefix">{isDeposit ? "$" : ""}</span>
+            <input
+              value={inputValue}
+              onChange={(e) => setInputValue(e.target.value)}
+              placeholder="0.00"
+              inputMode="decimal"
+            />
+            <span className="suffix">{balanceLabel}</span>
           </div>
           <div className={s.balHint}>
-            Wallet balance: <span style={{ color: "var(--text-2)" }}>$24,500 USDC</span>
+            Wallet balance:{" "}
+            <span style={{ color: "var(--text-2)" }}>
+              {hasWallet
+                ? balance == null
+                  ? "—"
+                  : `${formatUsdc(balance, { withSymbol: false })} ${balanceLabel}`
+                : "—"}
+            </span>
           </div>
           <div className={s.qpRow}>
-            {["25%", "50%", "75%", "MAX"].map((q) => (
-              <button key={q} className={s.qp} type="button">{q}</button>
+            {[25, 50, 75].map((p) => (
+              <button
+                key={p}
+                className={s.qp}
+                type="button"
+                onClick={() => handleQuickPick(p)}
+                disabled={!hasWallet}
+              >
+                {p}%
+              </button>
             ))}
+            <button
+              className={s.qp}
+              type="button"
+              onClick={() => handleQuickPick("max")}
+              disabled={!hasWallet}
+            >
+              MAX
+            </button>
           </div>
         </div>
 
         <div className={s.depRow}>
-          <span className="eyebrow" style={{ display: "block", marginBottom: 10 }}>You receive</span>
+          <span className="eyebrow" style={{ display: "block", marginBottom: 10 }}>
+            You receive
+          </span>
           <div className={s.receive}>
             <div className={s.receiveBig}>
-              {share.toFixed(2)} <span style={{ color: "var(--text-2)", fontSize: 18 }}>aUSDC-A</span>
+              {isDeposit
+                ? previewSharesFromAmount != null
+                  ? formatUsdc(previewSharesFromAmount, { withSymbol: false })
+                  : "—"
+                : previewUsdcFromShares != null
+                  ? `$${formatUsdc(previewUsdcFromShares, { withSymbol: false })}`
+                  : "—"}
+              <span style={{ color: "var(--text-2)", fontSize: 18, marginLeft: 8 }}>
+                {isDeposit ? "aUSDC" : "USDC"}
+              </span>
             </div>
             <div className={s.receiveSub}>
-              Share price: $1.0155 · <span className="up">+1.55% since launch</span>
+              {market && market.totalLpShares > 0n
+                ? `Share price: $${formatUsdc(
+                    (market.lpNav * 10_000n) / market.totalLpShares,
+                    { withSymbol: false, maxFractionDigits: 4 }
+                  )} per share`
+                : market
+                  ? "First depositor — share price 1.0000"
+                  : ""}
+              {!isDeposit && protocol?.withdrawalFeeBps
+                ? ` · Withdrawal fee ${formatBps(protocol.withdrawalFeeBps)}`
+                : ""}
             </div>
           </div>
         </div>
 
         <div className={s.depRow}>
-          <div className={s.proj}>
-            <span className="eyebrow">Projected earnings (at current 9.3% APY)</span>
-            <div className={s.projGrid}>
-              <div className={s.projCell}>
-                <span className={s.projCellKey}>30 days</span>
-                <span className={s.projCellValue}>+$76.44</span>
-              </div>
-              <div className={s.projCell}>
-                <span className={s.projCellKey}>90 days</span>
-                <span className={s.projCellValue}>+$232.19</span>
-              </div>
-              <div className={s.projCell}>
-                <span className={s.projCellKey}>1 year</span>
-                <span className={s.projCellValue}>+$974.35</span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className={s.depRow}>
-          <button className={`${s.ctaPrimary} ${s.disabled}`} type="button">
-            {tab === "deposit" ? "Deposit →" : "Withdraw →"}
+          <button
+            className={`${s.ctaPrimary} ${!canSubmit ? s.disabled : ""}`}
+            type="button"
+            onClick={isDeposit ? handleDeposit : handleWithdraw}
+            disabled={!canSubmit}
+          >
+            {pending ? "Submitting…" : isDeposit ? "Deposit →" : "Withdraw →"}
           </button>
-          <div className={s.ctaHint}>Connect wallet to {tab}</div>
-          <div className={s.finePrint}>Withdrawal fee 0.05% · May queue if pool committed.</div>
+          <div className={s.ctaHint}>
+            {!hasWallet
+              ? `Connect wallet to ${tab}`
+              : !market
+                ? "Loading market…"
+                : ""}
+          </div>
+          {error ? <div className={s.errorBanner}>{error}</div> : null}
+          {signature ? (
+            <div className={s.successBanner}>
+              <span>{isDeposit ? "Deposit confirmed" : "Withdrawal confirmed"}</span>
+              <a href={explorerTxUrl(signature)} target="_blank" rel="noreferrer">
+                {signature.slice(0, 16)}…{signature.slice(-8)} ↗
+              </a>
+            </div>
+          ) : null}
+          <div className={s.finePrint}>
+            {isDeposit
+              ? "Deposit mints aUSDC representing your share. Yield accrues to share price."
+              : "Withdrawals redeem from lp_vault first; if light, the program redeems Kamino k-tokens atomically."}
+          </div>
         </div>
       </div>
     </div>
   );
 }
+
+// ─── PositionCard ──────────────────────────────────────────────────────────
 
 function LpChart() {
   const W = 420, H = 200, PADL = 10, PADR = 70, PADT = 14, PADB = 16;
@@ -340,61 +715,77 @@ function LpChart() {
   );
 }
 
-function PositionCard() {
+interface PositionCardProps {
+  market: Market | null | undefined;
+  lpPosition: LpPosition | null | undefined;
+  hasWallet: boolean;
+}
+
+function PositionCard({ market, lpPosition, hasWallet }: PositionCardProps) {
+  const sharesHeld = lpPosition?.shares ?? 0n;
+  const currentValue =
+    market && lpPosition && market.totalLpShares > 0n
+      ? (lpPosition.shares * market.lpNav) / market.totalLpShares
+      : 0n;
+  const deposited = lpPosition?.depositedAmount ?? 0n;
+  const totalEarned = currentValue >= deposited ? currentValue - deposited : 0n;
+  const sharePctBps =
+    market && lpPosition && market.totalLpShares > 0n
+      ? Number((lpPosition.shares * 10_000n) / market.totalLpShares)
+      : 0;
+
   return (
     <div className={`${s.card} ${s.posCard} reveal`}>
       <div className={s.posHead}>
         <h3>Your Position</h3>
         <span className={s.posPill}>
-          <span className="tok">A</span>aUSDC-A
+          <span className="tok">A</span>aUSDC
         </span>
       </div>
-      <table className={s.posTbl}>
-        <tbody>
-          <tr><td>Shares held</td><td>9,847.23 aUSDC-A</td></tr>
-          <tr><td>Current value</td><td>$10,152.80</td></tr>
-          <tr><td>Deposited</td><td>$10,000.00</td></tr>
-          <tr className={s.totalEarn}><td>Total earned</td><td>+$152.80</td></tr>
-          <tr className={s.indent}>
-            <td>
-              <span className={s.withDot}>
-                <span className={s.dotBlue} />Kamino base
-              </span>
-            </td>
-            <td>+$112.34</td>
-          </tr>
-          <tr className={s.indent}>
-            <td>
-              <span className={s.withDot}>
-                <span className={s.dotPinkStatic} />Spread yield
-              </span>
-            </td>
-            <td>+$40.46</td>
-          </tr>
-          <tr><td>Your share of pool</td><td>0.42%</td></tr>
-        </tbody>
-      </table>
+      {!hasWallet ? (
+        <div style={{ padding: "32px 0", color: "var(--text-2)", textAlign: "center" }}>
+          Connect wallet to see your LP position.
+        </div>
+      ) : !lpPosition ? (
+        <div style={{ padding: "32px 0", color: "var(--text-2)", textAlign: "center" }}>
+          No LP position yet — deposit USDC to mint shares.
+        </div>
+      ) : (
+        <table className={s.posTbl}>
+          <tbody>
+            <tr>
+              <td>Shares held</td>
+              <td>{formatUsdc(sharesHeld, { withSymbol: false })} aUSDC</td>
+            </tr>
+            <tr>
+              <td>Current value</td>
+              <td>${formatUsdc(currentValue, { withSymbol: false })}</td>
+            </tr>
+            <tr>
+              <td>Deposited</td>
+              <td>${formatUsdc(deposited, { withSymbol: false })}</td>
+            </tr>
+            <tr className={s.totalEarn}>
+              <td>Total earned</td>
+              <td>+${formatUsdc(totalEarned, { withSymbol: false })}</td>
+            </tr>
+            <tr>
+              <td>Your share of pool</td>
+              <td>{(sharePctBps / 100).toFixed(2)}%</td>
+            </tr>
+          </tbody>
+        </table>
+      )}
 
       <div className={s.posChart}>
-        <div className={s.posChartTitle}>Your LP value vs Kamino direct</div>
+        <div className={s.posChartTitle}>Your LP value vs Kamino direct (mock — partner refresh)</div>
         <LpChart />
-        <div className={s.posChartCaption}>
-          Spread yield has added <span className="earn">+$40.46</span> beyond Kamino base.
-        </div>
-      </div>
-
-      <div className={s.posStatus}>
-        <span className={s.posStatusLabel}>Withdraw status</span>
-        <span className={s.posStatusValue}>
-          <span className={s.posStatusOk}>
-            <span className="dot-pink" />Instant withdrawal available
-          </span>
-          · $2.4M free in Kamino
-        </span>
       </div>
     </div>
   );
 }
+
+// ─── Health (kept mocked per partner spec) ─────────────────────────────────
 
 function Gauge({ pct = 34, cap = 60 }: { pct?: number; cap?: number }) {
   const R = 90, CX = 110, CY = 100, SW = 16;
@@ -463,23 +854,30 @@ function Spark() {
   );
 }
 
-function Health() {
+function Health({ market }: { market: Market | null | undefined }) {
+  const totalNotional = market
+    ? market.totalFixedNotional + market.totalVariableNotional
+    : 0n;
+  const util = market ? utilizationPct(totalNotional, market.lpNav) : 0;
+  const cap = market ? market.maxUtilizationBps / 100 : 60;
   return (
     <section className={s.health}>
       <div className={`wrap ${s.healthGrid}`}>
         <div className={`${s.card} ${s.healthCard} reveal`}>
           <div className={s.hTitle}>Pool Utilization</div>
-          <Gauge pct={34} cap={60} />
+          <Gauge pct={util} cap={cap} />
         </div>
         <div className={`${s.card} ${s.healthCard} reveal`}>
           <div className={s.hTitle}>Pool Direction</div>
           <div className={s.dir}>
             <div className={s.dirChart} style={{ marginTop: 18 }}>
               <div className={`${s.dirSeg} ${s.pay}`} style={{ flexBasis: "54%" }}>
-                PayFixed $4.4M
+                PayFixed{" "}
+                {market ? formatUsdcCompact(market.totalFixedNotional) : "—"}
               </div>
               <div className={`${s.dirSeg} ${s.receive}`} style={{ flexBasis: "46%" }}>
-                ReceiveFixed $3.7M
+                ReceiveFixed{" "}
+                {market ? formatUsdcCompact(market.totalVariableNotional) : "—"}
               </div>
               <div className={s.dirMarker} style={{ left: "54%" }} />
             </div>
@@ -493,13 +891,10 @@ function Health() {
                 <span className={s.dotBlue} style={{ marginLeft: 6 }} />
               </span>
             </div>
-            <div className={s.dirSummary} style={{ marginTop: 10 }}>
-              Net exposure: $700K PayFixed · Balanced market
-            </div>
           </div>
         </div>
         <div className={`${s.card} ${s.healthCard} reveal`}>
-          <div className={s.hTitle}>Spread APY (7D)</div>
+          <div className={s.hTitle}>Spread APY (mock — partner refresh)</div>
           <div className={s.sparkWrap}>
             <div className={s.sparkRead}>
               <span className={s.sparkReadValue}>2.5%</span>
@@ -513,21 +908,63 @@ function Health() {
   );
 }
 
-export default function LpPage() {
+// ─── Page wrapper ──────────────────────────────────────────────────────────
+
+function LpPageContent() {
+  const searchParams = useSearchParams();
+  const wallet = useWallet();
+  const { data: markets } = useMarkets();
+  const { data: protocol } = useProtocol();
+
+  const marketAddress = useMemo(() => {
+    const fromUrl = searchParams.get("market");
+    if (fromUrl) return fromUrl;
+    if (markets && markets.length > 0) return markets[0].publicKey;
+    return null;
+  }, [searchParams, markets]);
+
+  const { data: market, mutate: refetchMarket } = useMarket(marketAddress);
+  const { data: lpPosition, mutate: refetchLp } = useLpPosition(
+    wallet.publicKey?.toBase58(),
+    marketAddress
+  );
+
+  const refresh = () => {
+    refetchMarket();
+    refetchLp();
+  };
+
   return (
     <>
       <RevealOnScroll />
       <Nav />
-      <PoolStrip />
+      <PoolStrip market={market} />
       <Hero />
       <section className={s.workspace}>
         <div className={`wrap ${s.workspaceGrid}`}>
-          <DepositCard />
-          <PositionCard />
+          <DepositCard
+            market={market}
+            protocol={protocol}
+            lpPosition={lpPosition}
+            refresh={refresh}
+          />
+          <PositionCard
+            market={market}
+            lpPosition={lpPosition}
+            hasWallet={!!wallet.publicKey}
+          />
         </div>
       </section>
-      <Health />
+      <Health market={market} />
       <Footer />
     </>
+  );
+}
+
+export default function LpPage() {
+  return (
+    <Suspense>
+      <LpPageContent />
+    </Suspense>
   );
 }

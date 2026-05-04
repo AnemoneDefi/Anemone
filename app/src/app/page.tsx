@@ -1,7 +1,92 @@
 "use client";
 
 import Link from "next/link";
+import { useMemo } from "react";
 import { RevealOnScroll } from "@/components/RevealOnScroll";
+import { useMarkets } from "@/lib/hooks";
+import {
+  calculateApyBps,
+  formatBps,
+  formatUsdcCompact,
+} from "@/lib/format";
+import { calculateSpread } from "@/lib/risk";
+import { MarketStatus, type Market } from "@anemone/sdk";
+
+interface LandingDerived {
+  variableBps: bigint;
+  fixedBps: bigint;
+  spreadBps: bigint;
+  marketTvlText: string;
+  totalTvlText: string;
+  openNotionalText: string;
+  avgApyText: string;
+  liveCount: number;
+}
+
+function deriveLandingStats(markets: Market[] | undefined): LandingDerived {
+  const fallback: LandingDerived = {
+    variableBps: 0n,
+    fixedBps: 0n,
+    spreadBps: 0n,
+    marketTvlText: "—",
+    totalTvlText: "—",
+    openNotionalText: "—",
+    avgApyText: "—",
+    liveCount: 0,
+  };
+  if (!markets || markets.length === 0) return fallback;
+
+  const live = markets.filter((m) => m.status === MarketStatus.Active);
+  if (live.length === 0) return fallback;
+
+  // Pick the first live market for the hero dashcard.
+  const focus = live[0];
+  const elapsed =
+    focus.lastRateUpdateTs > focus.previousRateUpdateTs
+      ? focus.lastRateUpdateTs - focus.previousRateUpdateTs
+      : 0n;
+  const variableBps = calculateApyBps(
+    focus.previousRateIndex,
+    focus.currentRateIndex,
+    elapsed
+  );
+  const spread = calculateSpread(
+    focus.baseSpreadBps,
+    focus.maxUtilizationBps,
+    focus.lpNav,
+    focus.totalFixedNotional,
+    focus.totalVariableNotional
+  );
+  const fixedBps = variableBps + spread.totalBps;
+
+  const totalTvl = live.reduce((sum, m) => sum + m.lpNav, 0n);
+  const totalNotional = live.reduce(
+    (sum, m) => sum + m.totalFixedNotional + m.totalVariableNotional,
+    0n
+  );
+  // Avg APY across markets weighted equally — simplification, fine for landing.
+  const avgApyBps =
+    live.length > 0
+      ? live.reduce((sum, m) => {
+          const e =
+            m.lastRateUpdateTs > m.previousRateUpdateTs
+              ? m.lastRateUpdateTs - m.previousRateUpdateTs
+              : 0n;
+          return sum + calculateApyBps(m.previousRateIndex, m.currentRateIndex, e);
+        }, 0n) / BigInt(live.length)
+      : 0n;
+
+  return {
+    variableBps,
+    fixedBps,
+    spreadBps: spread.totalBps,
+    marketTvlText: formatUsdcCompact(focus.lpNav),
+    totalTvlText: formatUsdcCompact(totalTvl),
+    openNotionalText: formatUsdcCompact(totalNotional),
+    avgApyText: formatBps(avgApyBps),
+    liveCount: live.length,
+  };
+}
 
 function LandingNav() {
   return (
@@ -71,7 +156,7 @@ function HeroChartSvg() {
   );
 }
 
-function Hero() {
+function Hero({ derived }: { derived: LandingDerived }) {
   return (
     <section className="hero">
       <div className="wrap">
@@ -125,22 +210,28 @@ function Hero() {
                 <div className="dc-stats">
                   <div className="dc-tile variable">
                     <div className="k">Variable</div>
-                    <div className="v num">9.4%</div>
+                    <div className="v num">
+                      {derived.variableBps > 0n ? formatBps(derived.variableBps) : "—"}
+                    </div>
                   </div>
                   <div className="dc-tile fixed">
                     <div className="k">Fixed</div>
-                    <div className="v num">8.20%</div>
+                    <div className="v num">
+                      {derived.fixedBps > 0n ? formatBps(derived.fixedBps) : "—"}
+                    </div>
                   </div>
                   <div className="dc-tile">
                     <div className="k">Spread</div>
-                    <div className="v num">1.2%</div>
+                    <div className="v num">
+                      {derived.spreadBps > 0n ? formatBps(derived.spreadBps) : "—"}
+                    </div>
                   </div>
                 </div>
               </div>
               <div className="hero-foot mono">
-                Last settlement: 2 min ago · Block 312,445,890
-                <br />
-                Next settlement in 23h 58m
+                {derived.liveCount > 0
+                  ? `Live on Solana · TVL ${derived.marketTvlText} · ${derived.liveCount} active market${derived.liveCount === 1 ? "" : "s"}`
+                  : "Connect to RPC to see live rates"}
               </div>
             </div>
           </div>
@@ -150,7 +241,9 @@ function Hero() {
   );
 }
 
-function Protocols() {
+function Protocols({ derived }: { derived: LandingDerived }) {
+  const kaminoApy =
+    derived.variableBps > 0n ? formatBps(derived.variableBps) : "—";
   const items = [
     {
       key: "kamino",
@@ -158,9 +251,9 @@ function Protocols() {
       glyph: "K",
       active: true,
       slabel: "USDC · 30-day tenor",
-      apy: "5.32%",
-      apyLabel: "Supply APY",
-      href: "/trade?market=kamino-usdc-30d",
+      apy: kaminoApy,
+      apyLabel: "Variable APY",
+      href: "/trade",
     },
     { key: "solend",   name: "Solend",   glyph: "S", active: false, slabel: "Rolling out Q3 2026", tooltip: "Expected Q3 2026" },
     { key: "marginfi", name: "MarginFi", glyph: "M", active: false, slabel: "Rolling out Q3 2026", tooltip: "Expected Q3 2026" },
@@ -221,22 +314,22 @@ function Protocols() {
   );
 }
 
-function StatsBar() {
+function StatsBar({ derived }: { derived: LandingDerived }) {
   return (
     <div className="stats-bar">
       <div className="grid">
         <div className="stat">
-          <div className="v num">$2.4M</div>
+          <div className="v num">{derived.totalTvlText}</div>
           <div className="underline" />
           <div className="k">Protocol TVL</div>
         </div>
         <div className="stat">
-          <div className="v num">$8.1M</div>
+          <div className="v num">{derived.openNotionalText}</div>
           <div className="underline" />
           <div className="k">Open Notional</div>
         </div>
         <div className="stat">
-          <div className="v num">9.3%</div>
+          <div className="v num">{derived.avgApyText}</div>
           <div className="underline" />
           <div className="k">Avg LP APY</div>
         </div>
@@ -603,6 +696,9 @@ function LandingFooter() {
 // Landing page lives at `/`. All landing CSS is scoped under `.landing-root`
 // in globals.css so it can't leak into the dApp routes (/markets, /trade, etc).
 export default function LandingPage() {
+  const { data: markets } = useMarkets();
+  const derived = useMemo(() => deriveLandingStats(markets), [markets]);
+
   return (
     <div className="landing-root">
       <RevealOnScroll />
@@ -614,9 +710,9 @@ export default function LandingPage() {
       <div className="glow glow-s4" />
 
       <LandingNav />
-      <Hero />
-      <Protocols />
-      <StatsBar />
+      <Hero derived={derived} />
+      <Protocols derived={derived} />
+      <StatsBar derived={derived} />
       <Problem />
       <Solution />
       <How />

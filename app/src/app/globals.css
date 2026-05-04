@@ -1433,3 +1433,58 @@ footer.mini .wrap {
   .landing-root .proto-badge { justify-self: start; }
   .landing-root .proto-action { max-width: none; justify-self: stretch; }
 }
+
+/* Wallet adapter overrides — match .btn-outline-pink aesthetic */
+.wallet-adapter-button-trigger,
+.wallet-adapter-button.wallet-adapter-button-trigger {
+  background: transparent;
+  border: 1px solid var(--pink);
+  color: var(--pink);
+  height: 36px;
+  padding: 0 18px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: 999px;
+  transition: all 0.2s ease;
+  line-height: 1;
+}
+
+.wallet-adapter-button-trigger:not([disabled]):hover,
+.wallet-adapter-button.wallet-adapter-button-trigger:not([disabled]):hover {
+  background: rgba(236, 72, 153, 0.08);
+  color: var(--pink);
+}
+
+.wallet-adapter-button-start-icon,
+.wallet-adapter-button-end-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.wallet-adapter-dropdown-list {
+  background: var(--bg-2, #14102b);
+  border: 1px solid var(--border);
+  font-family: inherit;
+}
+
+.wallet-adapter-dropdown-list-item {
+  font-size: 13px;
+  font-weight: 500;
+  font-family: inherit;
+}
+
+.wallet-adapter-modal-wrapper {
+  background: var(--bg-2, #14102b);
+  border: 1px solid var(--border);
+  font-family: inherit;
+}
+
+.wallet-adapter-modal-title {
+  font-family: inherit;
+  font-weight: 600;
+}
+
+.wallet-adapter-modal-button-close {
+  background: transparent;
+}
