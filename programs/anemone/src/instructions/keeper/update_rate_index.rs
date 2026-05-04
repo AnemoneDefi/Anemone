@@ -3,10 +3,6 @@ use crate::state::SwapMarket;
 use crate::helpers::read_kamino_rate_index;
 use crate::errors::AnemoneError;
 
-/// Byte offset of `last_update.slot` within a Kamino Reserve account.
-/// Layout: 8 (discriminator) + 1 (version) + 7 (padding) = 16.
-const LAST_UPDATE_SLOT_OFFSET: usize = 16;
-
 #[derive(Accounts)]
 pub struct UpdateRateIndex<'info> {
     #[account(
@@ -30,7 +26,25 @@ pub struct UpdateRateIndex<'info> {
         constraint = kamino_reserve.key() == market.underlying_reserve
             @ AnemoneError::InvalidReserve
     )]
+<<<<<<< HEAD
+    pub kamino_reserve: AccountLoader<'info, Reserve>,
+
+    /// Layer 1 of the rate-index-collapse defense (see SECURITY.md Finding 2).
+    /// Permissionless update_rate_index lets an attacker bundle two calls in
+    /// a single tx so both reads see the same Kamino bsf — the rotation then
+    /// collapses `previous_rate_index == current_rate_index`, and the next
+    /// open_swap quotes apy = 0 against PayFixed for ~spread bps. Gating to
+    /// the keeper closes the trivial path; layer 2 (no-op rotation reject)
+    /// and layer 3 (open_swap apy=0 reject) cover keeper-bot misfires and
+    /// future regressions.
+    #[account(
+        constraint = keeper.key() == protocol_state.keeper_authority
+            @ AnemoneError::InvalidAuthority,
+    )]
+    pub keeper: Signer<'info>,
+=======
     pub kamino_reserve: AccountInfo<'info>,
+>>>>>>> 36f5580 (feat: localnet test environment with Kamino cloned from mainnet)
 }
 
 /// Maximum slots a Reserve can be stale before we reject the update (~5 minutes)
@@ -44,6 +58,7 @@ pub const MAX_STALE_SLOTS: u64 = 750;
 pub const MIN_RATE_UPDATE_ELAPSED_SECS: i64 = 8;
 
 pub fn handle_update_rate_index(ctx: Context<UpdateRateIndex>) -> Result<()> {
+    let reserve = ctx.accounts.kamino_reserve.load()?;
     let current_slot = Clock::get()?.slot;
 
     // H2: defense-in-depth against Kamino struct layout drift. If a future
@@ -68,12 +83,14 @@ pub fn handle_update_rate_index(ctx: Context<UpdateRateIndex>) -> Result<()> {
 
     // Reject stale reserve data — attacker could exploit outdated rates.
     // Only enforce when current_slot > reserve slot (skip on localnet where slots start at 0)
+    let reserve_slot = reserve.last_update.slot;
     if current_slot > reserve_slot {
         require!(
             current_slot - reserve_slot < MAX_STALE_SLOTS,
             AnemoneError::StaleOracle
         );
     }
+    drop(reserve);
 
     let market = &mut ctx.accounts.market;
     let rate_index = read_kamino_rate_index(&ctx.accounts.kamino_reserve)?;
