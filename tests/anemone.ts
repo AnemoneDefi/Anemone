@@ -5,10 +5,12 @@ import { PublicKey, Keypair, SystemProgram } from "@solana/web3.js";
 import {
   TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
+  ASSOCIATED_TOKEN_PROGRAM_ID,
   createMint,
   createAccount,
   mintTo,
   getAccount,
+  getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
 import { assert } from "chai";
 import bs58 from "bs58";
@@ -687,10 +689,8 @@ describe("anemone", () => {
         DEPOSIT_AMOUNT * 2, // Extra for second deposit
       );
 
-      // Create depositor's LP token account
-      depositorLpTokenAccount = await createAccount(
-        provider.connection,
-        (authority as any).payer,
+      // Derive depositor's LP token ATA — program will init_if_needed.
+      depositorLpTokenAccount = getAssociatedTokenAddressSync(
         lpMintPda,
         authority.publicKey,
       );
@@ -712,6 +712,7 @@ describe("anemone", () => {
           depositorLpTokenAccount: depositorLpTokenAccount,
           depositor: authority.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
         })
         .rpc();
@@ -756,6 +757,7 @@ describe("anemone", () => {
           depositorLpTokenAccount: depositorLpTokenAccount,
           depositor: authority.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
         })
         .rpc();
@@ -998,13 +1000,9 @@ describe("anemone", () => {
         LP_DEPOSIT + SWAP_NOTIONAL, // plenty for both
       );
 
-      const traderLpTokenKp = Keypair.generate();
-      traderLpTokenAccount = await createAccount(
-        provider.connection,
-        (authority as any).payer,
+      traderLpTokenAccount = getAssociatedTokenAddressSync(
         swapLpMintPda,
         authority.publicKey,
-        traderLpTokenKp,
       );
 
       // Deposit $100k as LP
@@ -1021,6 +1019,7 @@ describe("anemone", () => {
           depositorLpTokenAccount: traderLpTokenAccount,
           depositor: authority.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
         })
         .rpc();
@@ -1786,13 +1785,9 @@ describe("anemone", () => {
         LP_DEPOSIT + SWAP_NOTIONAL,
       );
 
-      const lpTokenKp = Keypair.generate();
-      const shortLpTokenAccount = await createAccount(
-        provider.connection,
-        (authority as any).payer,
+      const shortLpTokenAccount = getAssociatedTokenAddressSync(
         shortLpMintPda,
         authority.publicKey,
-        lpTokenKp,
       );
 
       // Deposit LP
@@ -1809,6 +1804,7 @@ describe("anemone", () => {
           depositorLpTokenAccount: shortLpTokenAccount,
           depositor: authority.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
         })
         .rpc();
@@ -2082,13 +2078,9 @@ describe("anemone", () => {
         LP_DEPOSIT + SWAP_NOTIONAL,
       );
 
-      const liqLpTokenKp = Keypair.generate();
-      const liqLpToken = await createAccount(
-        provider.connection,
-        (authority as any).payer,
+      const liqLpToken = getAssociatedTokenAddressSync(
         liqLpMintPda,
         authority.publicKey,
-        liqLpTokenKp,
       );
 
       await program.methods
@@ -2104,6 +2096,7 @@ describe("anemone", () => {
           depositorLpTokenAccount: liqLpToken,
           depositor: authority.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
         })
         .rpc();
@@ -2621,13 +2614,9 @@ describe("anemone", () => {
         LP_DEPOSIT + SWAP_NOTIONAL,
       );
 
-      const earlyLpTokenKp = Keypair.generate();
-      const earlyLpToken = await createAccount(
-        provider.connection,
-        (authority as any).payer,
+      const earlyLpToken = getAssociatedTokenAddressSync(
         earlyLpMintPda,
         authority.publicKey,
-        earlyLpTokenKp,
       );
 
       await program.methods
@@ -2643,6 +2632,7 @@ describe("anemone", () => {
           depositorLpTokenAccount: earlyLpToken,
           depositor: authority.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
         })
         .rpc();
@@ -3193,9 +3183,7 @@ describe("anemone", () => {
         authority.publicKey,
         10_000,
       );
-      pauseDepositorLpTokenAccount = await createAccount(
-        provider.connection,
-        pauseDepositor,
+      pauseDepositorLpTokenAccount = getAssociatedTokenAddressSync(
         lpMintPda,
         pauseDepositor.publicKey,
       );
@@ -3260,6 +3248,7 @@ describe("anemone", () => {
             depositorLpTokenAccount: pauseDepositorLpTokenAccount,
             depositor: pauseDepositor.publicKey,
             tokenProgram: TOKEN_PROGRAM_ID,
+            associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
             systemProgram: SystemProgram.programId,
           })
           .signers([pauseDepositor])
