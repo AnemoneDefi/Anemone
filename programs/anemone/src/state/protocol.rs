@@ -3,11 +3,12 @@ use anchor_lang::prelude::*;
 #[account]
 pub struct ProtocolState {
     pub authority: Pubkey,
+    pub keeper_authority: Pubkey,
     pub treasury: Pubkey,
     pub total_markets: u64,
     /// 10% performance fee on LP spread (1000 = 10%)
     pub protocol_fee_bps: u16,
-    /// 0.2% on notional when opening swap (20 = 0.2%)
+    /// 0.05% on notional when opening swap (5 = 0.05%)
     pub opening_fee_bps: u16,
     /// 3% on remaining margin at liquidation (300 = 3%)
     pub liquidation_fee_bps: u16,
@@ -16,11 +17,17 @@ pub struct ProtocolState {
     /// 5% on collateral returned when trader closes early (500 = 5%)
     pub early_close_fee_bps: u16,
     pub bump: u8,
+    /// Global kill switch. When true, `open_swap` and `deposit_liquidity`
+    /// reject — no new capital enters the system. Settlement, liquidation,
+    /// Kamino sync, early close, claim, and LP withdrawals stay live so
+    /// admin cannot freeze user funds in-flight.
+    pub paused: bool,
 }
 
 impl ProtocolState {
     pub const SIZE: usize = 8  // discriminator
         + 32  // authority
+        + 32  // keeper_authority
         + 32  // treasury
         + 8   // total_markets
         + 2   // protocol_fee_bps
@@ -28,5 +35,6 @@ impl ProtocolState {
         + 2   // liquidation_fee_bps
         + 2   // withdrawal_fee_bps
         + 2   // early_close_fee_bps
-        + 1;  // bump
+        + 1   // bump
+        + 1;  // paused
 }

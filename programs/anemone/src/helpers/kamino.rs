@@ -45,6 +45,113 @@ pub fn read_kamino_rate_index(reserve_info: &AccountInfo) -> Result<u128> {
     Ok(lower | upper)
 }
 
+/// Klend's scaled-fraction shift: u128 fields ending in `_sf` are stored as
+/// `actual_value << 60`. Right-shift by this to get base units.
+const KAMINO_SF_SHIFT: u32 = 60;
+
+/// Converts a k-token (collateral) amount into its current USDC-equivalent
+/// value, using the Kamino reserve's post-refresh exchange rate.
+///
+/// Formula (matches klend's internal `total_liquidity` + `mint_total_supply`):
+///
+/// ```text
+///   total_liquidity = available_amount
+///                   + (borrowed_amount_sf            >> 60)
+///                   - (accumulated_protocol_fees_sf  >> 60)
+///                   - (accumulated_referrer_fees_sf  >> 60)
+///                   - (pending_referrer_fees_sf      >> 60)
+///   exchange_rate   = total_liquidity / mint_total_supply
+///   usdc_value      = collateral_amount * exchange_rate
+/// ```
+///
+/// IMPORTANT: caller must `cpi_refresh_reserve` in the same tx, otherwise
+/// `borrowed_amount_sf` is stale and the value will be slightly off (and
+/// klend's `last_update.stale = 1`). The returned `u64` saturates the math
+/// at `u64::MAX` only on absurd values that wouldn't occur with sane k-token
+/// balances.
+pub fn read_kamino_collateral_to_liquidity(
+    reserve_loader: &AccountLoader<Reserve>,
+    collateral_amount: u64,
+) -> Result<u64> {
+    let reserve = reserve_loader.load()?;
+    let liq = &reserve.liquidity;
+    let coll = &reserve.collateral;
+
+    let available = liq.available_amount as u128;
+    let borrowed = liq.borrowed_amount_sf >> KAMINO_SF_SHIFT;
+    let protocol_fees = liq.accumulated_protocol_fees_sf >> KAMINO_SF_SHIFT;
+    let referrer_fees = liq.accumulated_referrer_fees_sf >> KAMINO_SF_SHIFT;
+    let pending_referrer = liq.pending_referrer_fees_sf >> KAMINO_SF_SHIFT;
+
+    let total_liquidity = available
+        .checked_add(borrowed)
+        .and_then(|v| v.checked_sub(protocol_fees))
+        .and_then(|v| v.checked_sub(referrer_fees))
+        .and_then(|v| v.checked_sub(pending_referrer))
+        .ok_or(AnemoneError::MathOverflow)?;
+
+    let mint_total_supply = coll.mint_total_supply;
+    require!(mint_total_supply > 0, AnemoneError::MathOverflow);
+
+    let usdc_value = (collateral_amount as u128)
+        .checked_mul(total_liquidity)
+        .and_then(|v| v.checked_div(mint_total_supply as u128))
+        .ok_or(AnemoneError::MathOverflow)?;
+
+    u64::try_from(usdc_value).map_err(|_| AnemoneError::MathOverflow.into())
+}
+
+/// Inverse of `read_kamino_collateral_to_liquidity` — given a desired USDC
+/// amount, returns the k-USDC (collateral) amount needed to redeem at least
+/// that USDC at the reserve's current exchange rate.
+///
+/// Uses ceiling division so the caller is guaranteed to receive at least the
+/// requested USDC (Kamino's redeem floors when computing actual delivered
+/// liquidity, so a 1 raw unit safety margin avoids 1-off shortfalls). The
+/// caller MUST then `min(result, kamino_deposit_account.amount)` to never
+/// ask Kamino to burn more k-USDC than the protocol actually holds — this
+/// is the cap that makes withdrawals always partial-pay rather than revert.
+///
+/// Same staleness caveat as `read_kamino_collateral_to_liquidity`: caller
+/// should refresh the reserve in the same tx for accurate values.
+pub fn read_kamino_liquidity_to_collateral(
+    reserve_loader: &AccountLoader<Reserve>,
+    usdc_amount: u64,
+) -> Result<u64> {
+    let reserve = reserve_loader.load()?;
+    let liq = &reserve.liquidity;
+    let coll = &reserve.collateral;
+
+    let available = liq.available_amount as u128;
+    let borrowed = liq.borrowed_amount_sf >> KAMINO_SF_SHIFT;
+    let protocol_fees = liq.accumulated_protocol_fees_sf >> KAMINO_SF_SHIFT;
+    let referrer_fees = liq.accumulated_referrer_fees_sf >> KAMINO_SF_SHIFT;
+    let pending_referrer = liq.pending_referrer_fees_sf >> KAMINO_SF_SHIFT;
+
+    let total_liquidity = available
+        .checked_add(borrowed)
+        .and_then(|v| v.checked_sub(protocol_fees))
+        .and_then(|v| v.checked_sub(referrer_fees))
+        .and_then(|v| v.checked_sub(pending_referrer))
+        .ok_or(AnemoneError::MathOverflow)?;
+
+    require!(total_liquidity > 0, AnemoneError::MathOverflow);
+
+    let mint_total_supply = coll.mint_total_supply as u128;
+    require!(mint_total_supply > 0, AnemoneError::MathOverflow);
+
+    // Ceiling division: collateral = ceil(usdc * supply / total_liquidity)
+    let numerator = (usdc_amount as u128)
+        .checked_mul(mint_total_supply)
+        .ok_or(AnemoneError::MathOverflow)?;
+    let collateral_amount = numerator
+        .checked_add(total_liquidity - 1)
+        .and_then(|v| v.checked_div(total_liquidity))
+        .ok_or(AnemoneError::MathOverflow)?;
+
+    u64::try_from(collateral_amount).map_err(|_| AnemoneError::MathOverflow.into())
+}
+
 /// Converts a rate index delta over a time period into an annualized APY in basis points.
 /// Uses Taylor expansion with 3 terms for >99.6% precision vs true compound.
 ///
@@ -60,6 +167,11 @@ pub fn calculate_current_apy_from_index(
     require!(elapsed_seconds > 0, AnemoneError::InvalidElapsedTime);
     require!(previous_rate_index > 0, AnemoneError::InvalidRateIndex);
     require!(current_rate_index >= previous_rate_index, AnemoneError::InvalidRateIndex);
+
+    // Zero growth → 0 APY (also avoids overflow in Taylor terms when elapsed is small)
+    if current_rate_index == previous_rate_index {
+        return Ok(0);
+    }
 
     const SECONDS_PER_YEAR: u128 = 31_536_000;
     const PRECISION: u128 = 1_000_000_000; // 10^9 for fixed-point math

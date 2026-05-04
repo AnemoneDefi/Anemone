@@ -3,11 +3,17 @@ use anchor_spl::token_interface::{
     Mint, TokenAccount, TokenInterface,
     mint_to, transfer_checked, MintTo, TransferChecked,
 };
-use crate::state::{SwapMarket, LpPosition, LpStatus};
+use crate::state::{SwapMarket, LpPosition, LpStatus, ProtocolState, MAX_NAV_STALENESS_SECS};
 use crate::errors::AnemoneError;
 
 #[derive(Accounts)]
 pub struct DepositLiquidity<'info> {
+    #[account(
+        seeds = [b"protocol"],
+        bump = protocol_state.bump,
+    )]
+    pub protocol_state: Account<'info, ProtocolState>,
+
     #[account(
         mut,
         seeds = [b"market", market.underlying_reserve.as_ref(), &market.tenor_seconds.to_le_bytes()],
@@ -74,17 +80,29 @@ pub fn handle_deposit_liquidity(
 ) -> Result<()> {
     require!(amount > 0, AnemoneError::InvalidAmount);
 
+    require!(!ctx.accounts.protocol_state.paused, AnemoneError::ProtocolPaused);
+
+    // C2: require a recent NAV sync. Share pricing depends on lp_nav being
+    // close to the real redeemable value (lp_vault + Kamino yield). If the
+    // caller did not bundle sync_kamino_yield recently, bail out — the
+    // frontend should prepend the sync instruction and retry.
+    let now = Clock::get()?.unix_timestamp;
+    let nav_age = now
+        .checked_sub(ctx.accounts.market.last_kamino_sync_ts)
+        .ok_or(AnemoneError::MathOverflow)?;
+    require!(nav_age < MAX_NAV_STALENESS_SECS, AnemoneError::StaleNav);
+
     let market = &mut ctx.accounts.market;
     let lp_position = &mut ctx.accounts.lp_position;
 
-    // Step 1: Calculate shares
-    // First depositor gets 1:1, subsequent get proportional to pool value
+    // Step 1: Calculate shares.
+    // First depositor gets 1:1, subsequent get proportional to pool value.
     let shares = if market.total_lp_shares == 0 {
         amount
     } else {
         (amount as u128)
             .checked_mul(market.total_lp_shares as u128)
-            .and_then(|v| v.checked_div(market.total_lp_deposits as u128))
+            .and_then(|v| v.checked_div(market.lp_nav as u128))
             .ok_or(AnemoneError::MathOverflow)? as u64
     };
 
@@ -130,7 +148,7 @@ pub fn handle_deposit_liquidity(
     )?;
 
     // Step 4: Update market state
-    market.total_lp_deposits = market.total_lp_deposits
+    market.lp_nav = market.lp_nav
         .checked_add(amount)
         .ok_or(AnemoneError::MathOverflow)?;
     market.total_lp_shares = market.total_lp_shares
@@ -143,8 +161,6 @@ pub fn handle_deposit_liquidity(
         lp_position.owner = ctx.accounts.depositor.key();
         lp_position.market = market.key();
         lp_position.status = LpStatus::Active;
-        lp_position.withdrawal_requested_at = 0;
-        lp_position.withdrawal_amount = 0;
         lp_position.bump = ctx.bumps.lp_position;
     }
     lp_position.shares = lp_position.shares

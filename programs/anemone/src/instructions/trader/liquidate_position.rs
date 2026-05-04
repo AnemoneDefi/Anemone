@@ -1,0 +1,580 @@
+use anchor_lang::prelude::*;
+use anchor_spl::token_interface::{
+    Mint, TokenAccount, TokenInterface,
+    transfer_checked, TransferChecked,
+};
+use kamino_lend::state::Reserve;
+use crate::state::{SwapMarket, SwapPosition, SwapDirection, PositionStatus, ProtocolState};
+use crate::helpers::{calculate_maintenance_margin, calculate_period_pnl, cpi_withdraw_from_kamino, read_kamino_liquidity_to_collateral};
+use crate::errors::AnemoneError;
+
+#[derive(Accounts)]
+pub struct LiquidatePosition<'info> {
+    #[account(
+        seeds = [b"protocol"],
+        bump = protocol_state.bump,
+    )]
+    pub protocol_state: Box<Account<'info, ProtocolState>>,
+
+    #[account(
+        mut,
+        seeds = [b"market", market.underlying_reserve.as_ref(), &market.tenor_seconds.to_le_bytes()],
+        bump = market.bump,
+    )]
+    pub market: Box<Account<'info, SwapMarket>>,
+
+    #[account(
+        mut,
+        close = owner,
+        seeds = [b"swap", swap_position.owner.as_ref(), market.key().as_ref(), &[swap_position.nonce]],
+        bump = swap_position.bump,
+        constraint = swap_position.market == market.key() @ AnemoneError::InvalidVault,
+        constraint = swap_position.status == PositionStatus::Open @ AnemoneError::PositionNotOpen,
+    )]
+    pub swap_position: Box<Account<'info, SwapPosition>>,
+
+    /// LP vault — source/dest for mark-to-market PnL settled on liquidation
+    #[account(
+        mut,
+        address = market.lp_vault @ AnemoneError::InvalidVault,
+    )]
+    pub lp_vault: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    /// Collateral vault — source of fee + remainder, and dest/source for MtM
+    #[account(
+        mut,
+        address = market.collateral_vault @ AnemoneError::InvalidVault,
+    )]
+    pub collateral_vault: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    /// Owner of the position — receives rent on close, no signer required
+    /// CHECK: Validated via swap_position.owner constraint and close = owner
+    #[account(
+        mut,
+        constraint = owner.key() == swap_position.owner @ AnemoneError::InvalidVault,
+    )]
+    pub owner: UncheckedAccount<'info>,
+
+    /// Owner's token account — receives remainder after liquidation fee
+    #[account(
+        mut,
+        token::mint = underlying_mint,
+        constraint = owner_token_account.owner == swap_position.owner @ AnemoneError::InvalidVault,
+    )]
+    pub owner_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    /// Liquidator's token account — receives the liquidator's share of the
+    /// liquidation fee (2/3 of the total).
+    #[account(
+        mut,
+        token::mint = underlying_mint,
+        token::authority = liquidator,
+    )]
+    pub liquidator_token_account: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    /// Treasury — receives the protocol's share of the liquidation fee
+    /// (1/3 of the total). Same address as `protocol_state.treasury`.
+    #[account(
+        mut,
+        token::mint = underlying_mint,
+        address = protocol_state.treasury @ AnemoneError::InvalidVault,
+    )]
+    pub treasury: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    /// The underlying token mint (e.g. USDC)
+    #[account(
+        address = market.underlying_mint @ AnemoneError::InvalidMint,
+    )]
+    pub underlying_mint: Box<InterfaceAccount<'info, Mint>>,
+
+    /// Anyone can liquidate (permissionless — earns the liquidator's 2/3
+    /// share of liquidation_fee_bps as incentive; the remaining 1/3 goes
+    /// to treasury).
+    pub liquidator: Signer<'info>,
+
+    pub token_program: Interface<'info, TokenInterface>,
+
+    // ----- Kamino accounts for internal redeem-on-shortfall -----
+    //
+    // liquidate_position drains lp_vault for catchup_unpaid_pnl + max(mtm_pnl,
+    // 0). If lp_vault is short, the program redeems the difference from
+    // Kamino in the same tx. Without this, a liquidator would have to bundle
+    // a separate withdraw_from_kamino preInstruction (or wait for the keeper),
+    // which re-introduces the grief vector PR #25 opened. See claim_matured.rs
+    // for the full design rationale; this is the keeper-side mirror.
+
+    #[account(
+        mut,
+        address = market.kamino_deposit_account @ AnemoneError::InvalidVault,
+    )]
+    pub kamino_deposit_account: Box<InterfaceAccount<'info, TokenAccount>>,
+
+    /// Kamino reserve — typed as AccountLoader so the handler can read the
+    /// live exchange rate to convert USDC shortfall into k-USDC collateral
+    /// before invoking `redeem_reserve_collateral` (Finding 10 fix).
+    #[account(
+        mut,
+        constraint = kamino_reserve.key() == market.underlying_reserve
+            @ AnemoneError::InvalidReserve,
+    )]
+    pub kamino_reserve: AccountLoader<'info, Reserve>,
+
+    /// CHECK: Validated by Kamino program during CPI
+    pub kamino_lending_market: AccountInfo<'info>,
+
+    /// CHECK: Validated by Kamino program during CPI
+    pub kamino_lending_market_authority: AccountInfo<'info>,
+
+    /// CHECK: Validated by Kamino program during CPI; must match underlying_mint
+    pub reserve_liquidity_mint: Box<InterfaceAccount<'info, Mint>>,
+
+    /// CHECK: Validated by Kamino program during CPI
+    #[account(mut)]
+    pub reserve_liquidity_supply: AccountInfo<'info>,
+
+    /// CHECK: Validated by Kamino program during CPI
+    #[account(mut)]
+    pub reserve_collateral_mint: AccountInfo<'info>,
+
+    pub collateral_token_program: Interface<'info, TokenInterface>,
+
+    pub liquidity_token_program: Interface<'info, TokenInterface>,
+
+    /// CHECK: Fixed address validated by Kamino
+    pub instruction_sysvar_account: AccountInfo<'info>,
+
+    /// CHECK: Validated against market.underlying_protocol below
+    #[account(
+        constraint = kamino_program.key() == market.underlying_protocol @ AnemoneError::InvalidReserve,
+    )]
+    pub kamino_program: AccountInfo<'info>,
+}
+
+pub fn handle_liquidate_position(ctx: Context<LiquidatePosition>) -> Result<()> {
+    let position = &ctx.accounts.swap_position;
+    let market = &ctx.accounts.market;
+    let protocol_state = &ctx.accounts.protocol_state;
+    let now = Clock::get()?.unix_timestamp;
+
+    let direction = position.direction;
+    let notional = position.notional;
+
+    // PDA signer seeds for vault transfers (also needed by MtM block)
+    let reserve_key = market.underlying_reserve;
+    let tenor_bytes = market.tenor_seconds.to_le_bytes();
+    let bump = market.bump;
+    let signer_seeds: &[&[&[u8]]] = &[&[
+        b"market",
+        reserve_key.as_ref(),
+        &tenor_bytes,
+        &[bump],
+    ]];
+
+    // H3: mark-to-market PnL since last settlement, *before* the maintenance
+    // margin check. Using the raw `collateral_remaining` field (stale between
+    // settlements) lets a keeper race settle_period — liquidating a position
+    // that is stale-underwater / MtM-healthy (trader loses profit they never
+    // got) or skipping one that is stale-healthy / MtM-underwater (LP bleeds
+    // while keeper waits for the field to update). Replicates the pattern
+    // from close_position_early.
+    let elapsed = now
+        .checked_sub(position.last_settlement_ts)
+        .ok_or(AnemoneError::MathOverflow)?;
+
+    let pnl: i64 = if elapsed <= 0
+        || market.current_rate_index == position.last_settled_rate_index
+    {
+        0
+    } else {
+        calculate_period_pnl(
+            direction,
+            notional,
+            position.fixed_rate_bps,
+            position.last_settled_rate_index,
+            market.current_rate_index,
+            elapsed,
+        )?
+    };
+
+    // Internal Kamino redeem on shortfall — mirror of close_position_early
+    // (see claim_matured.rs for design rationale). Total potential drain on
+    // lp_vault = unpaid_pnl + max(pnl, 0); if lp_vault has less, redeem the
+    // difference from Kamino now so the liquidation is atomic.
+    //
+    // Finding 10 fix: convert USDC shortfall → k-USDC via live exchange rate
+    // (was passing USDC as collateral_amount). Cap at actual k-USDC held;
+    // if cap binds, the transfer below moves what we have and the residual
+    // becomes unpaid_pnl, deferring full liquidation pay-out until rebalance.
+    let total_lp_drain: u64 = (position.unpaid_pnl.max(0) as u64)
+        .checked_add(pnl.max(0) as u64)
+        .ok_or(AnemoneError::MathOverflow)?;
+    let lp_vault_balance = ctx.accounts.lp_vault.amount;
+    let mut kamino_redeemed_usdc: u64 = 0;
+    if total_lp_drain > lp_vault_balance {
+        let shortfall_usdc = total_lp_drain - lp_vault_balance;
+        let computed_k = read_kamino_liquidity_to_collateral(
+            &ctx.accounts.kamino_reserve,
+            shortfall_usdc,
+        )?;
+        let max_held_k = ctx.accounts.kamino_deposit_account.amount;
+        let actual_redeem_k = computed_k.min(max_held_k);
+
+        if actual_redeem_k > 0 {
+            let lp_vault_before_cpi = ctx.accounts.lp_vault.amount;
+            cpi_withdraw_from_kamino(
+                &ctx.accounts.kamino_program,
+                &ctx.accounts.market.to_account_info(),
+                signer_seeds,
+                &ctx.accounts.kamino_reserve.to_account_info(),
+                &ctx.accounts.kamino_lending_market,
+                &ctx.accounts.kamino_lending_market_authority,
+                &ctx.accounts.reserve_liquidity_mint.to_account_info(),
+                &ctx.accounts.reserve_liquidity_supply,
+                &ctx.accounts.reserve_collateral_mint,
+                &ctx.accounts.kamino_deposit_account.to_account_info(),
+                &ctx.accounts.lp_vault.to_account_info(),
+                &ctx.accounts.collateral_token_program.to_account_info(),
+                &ctx.accounts.liquidity_token_program.to_account_info(),
+                &ctx.accounts.instruction_sysvar_account,
+                actual_redeem_k,
+            )?;
+            ctx.accounts.lp_vault.reload()?;
+            ctx.accounts.kamino_deposit_account.reload()?;
+            kamino_redeemed_usdc = ctx.accounts.lp_vault.amount
+                .saturating_sub(lp_vault_before_cpi);
+        }
+    }
+
+    // H1 catchup on existing unpaid_pnl BEFORE the MtM so that a trader
+    // who is "stale underwater" only because the LP owed them money gets
+    // credited first and is no longer subject to liquidation.
+    let catchup_amount: u64 = if position.unpaid_pnl > 0 && ctx.accounts.lp_vault.amount > 0 {
+        let amount = (position.unpaid_pnl as u64).min(ctx.accounts.lp_vault.amount);
+        if amount > 0 {
+            transfer_checked(
+                CpiContext::new_with_signer(
+                    ctx.accounts.token_program.to_account_info(),
+                    TransferChecked {
+                        from: ctx.accounts.lp_vault.to_account_info(),
+                        to: ctx.accounts.collateral_vault.to_account_info(),
+                        authority: ctx.accounts.market.to_account_info(),
+                        mint: ctx.accounts.underlying_mint.to_account_info(),
+                    },
+                    signer_seeds,
+                ),
+                amount,
+                ctx.accounts.underlying_mint.decimals,
+            )?;
+        }
+        amount
+    } else {
+        0
+    };
+
+    let vault_after_catchup = ctx.accounts.lp_vault.amount.saturating_sub(catchup_amount);
+
+    // Execute the MtM transfer between vaults. Capped by available balances.
+    // Shortfall tracking same as settle_period (H1): new unpaid_pnl accrues
+    // if vault short, but we later reject the whole liquidation if anything
+    // is still unpaid — liquidation is final, can't leave trader with a
+    // residual credit.
+    let (actual_delta, shortfall): (i64, u64) = if pnl > 0 {
+        let transfer_amount = (pnl as u64).min(vault_after_catchup);
+        if transfer_amount > 0 {
+            transfer_checked(
+                CpiContext::new_with_signer(
+                    ctx.accounts.token_program.to_account_info(),
+                    TransferChecked {
+                        from: ctx.accounts.lp_vault.to_account_info(),
+                        to: ctx.accounts.collateral_vault.to_account_info(),
+                        authority: ctx.accounts.market.to_account_info(),
+                        mint: ctx.accounts.underlying_mint.to_account_info(),
+                    },
+                    signer_seeds,
+                ),
+                transfer_amount,
+                ctx.accounts.underlying_mint.decimals,
+            )?;
+        }
+        let s = (pnl as u64).saturating_sub(transfer_amount);
+        (transfer_amount as i64, s)
+    } else if pnl < 0 {
+        let loss = ((-pnl) as u64).min(position.collateral_remaining);
+        if loss > 0 {
+            transfer_checked(
+                CpiContext::new_with_signer(
+                    ctx.accounts.token_program.to_account_info(),
+                    TransferChecked {
+                        from: ctx.accounts.collateral_vault.to_account_info(),
+                        to: ctx.accounts.lp_vault.to_account_info(),
+                        authority: ctx.accounts.market.to_account_info(),
+                        mint: ctx.accounts.underlying_mint.to_account_info(),
+                    },
+                    signer_seeds,
+                ),
+                loss,
+                ctx.accounts.underlying_mint.decimals,
+            )?;
+        }
+        (-(loss as i64), 0u64)
+    } else {
+        (0, 0)
+    };
+
+    // Reject liquidation if anything remains unpaid — LP still owes the
+    // trader but can't cover. Wait for keeper to refill and retry.
+    let unpaid_after: i64 = position.unpaid_pnl
+        .checked_sub(catchup_amount as i64)
+        .ok_or(AnemoneError::MathOverflow)?
+        .checked_add(shortfall as i64)
+        .ok_or(AnemoneError::MathOverflow)?;
+    require!(unpaid_after == 0, AnemoneError::UnpaidPnlOutstanding);
+
+    // Apply catchup + delta to in-memory collateral.
+    let collateral_after_catchup: u64 = position.collateral_remaining
+        .checked_add(catchup_amount)
+        .ok_or(AnemoneError::MathOverflow)?;
+
+    let collateral_mtm: u64 = if actual_delta >= 0 {
+        collateral_after_catchup
+            .checked_add(actual_delta as u64)
+            .ok_or(AnemoneError::MathOverflow)?
+    } else {
+        collateral_after_catchup
+            .checked_sub((-actual_delta) as u64)
+            .ok_or(AnemoneError::MathOverflow)?
+    };
+
+    // NOW check maintenance margin with the MtM-adjusted collateral (post-
+    // catchup). If the position is healthy after we paid the old debt, the
+    // whole tx reverts — including both transfers. Liquidation only
+    // succeeds when trader is genuinely underwater.
+    let maintenance = calculate_maintenance_margin(notional, market.tenor_seconds)?;
+    require!(
+        collateral_mtm < maintenance,
+        AnemoneError::AboveMaintenanceMargin
+    );
+
+    // Liquidation fee on the MtM collateral (not the stale field). See
+    // `compute_liquidation_split` for the 1:2 treasury/liquidator split math.
+    let (treasury_share, liquidator_share, remainder) = compute_liquidation_split(
+        collateral_mtm,
+        protocol_state.liquidation_fee_bps,
+    )?;
+
+    // Transfer treasury share
+    if treasury_share > 0 {
+        transfer_checked(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                TransferChecked {
+                    from: ctx.accounts.collateral_vault.to_account_info(),
+                    to: ctx.accounts.treasury.to_account_info(),
+                    authority: ctx.accounts.market.to_account_info(),
+                    mint: ctx.accounts.underlying_mint.to_account_info(),
+                },
+                signer_seeds,
+            ),
+            treasury_share,
+            ctx.accounts.underlying_mint.decimals,
+        )?;
+    }
+
+    // Transfer liquidator share
+    if liquidator_share > 0 {
+        transfer_checked(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                TransferChecked {
+                    from: ctx.accounts.collateral_vault.to_account_info(),
+                    to: ctx.accounts.liquidator_token_account.to_account_info(),
+                    authority: ctx.accounts.market.to_account_info(),
+                    mint: ctx.accounts.underlying_mint.to_account_info(),
+                },
+                signer_seeds,
+            ),
+            liquidator_share,
+            ctx.accounts.underlying_mint.decimals,
+        )?;
+    }
+
+    // Transfer remainder to owner
+    if remainder > 0 {
+        transfer_checked(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                TransferChecked {
+                    from: ctx.accounts.collateral_vault.to_account_info(),
+                    to: ctx.accounts.owner_token_account.to_account_info(),
+                    authority: ctx.accounts.market.to_account_info(),
+                    mint: ctx.accounts.underlying_mint.to_account_info(),
+                },
+                signer_seeds,
+            ),
+            remainder,
+            ctx.accounts.underlying_mint.decimals,
+        )?;
+    }
+
+    // Update market totals + lp_nav to mirror the MtM + catchup transfers
+    // (C2 + H1). Total out of lp_vault = catchup + positive actual_delta.
+    // Also mirror any internal Kamino redeem from above into
+    // total_kamino_collateral and decrement last_kamino_snapshot_usdc by
+    // the delivered USDC so the next sync_kamino_yield computes a clean
+    // yield delta.
+    let kamino_balance_now = ctx.accounts.kamino_deposit_account.amount;
+    let market = &mut ctx.accounts.market;
+    market.total_kamino_collateral = kamino_balance_now;
+    if kamino_redeemed_usdc > 0 {
+        market.last_kamino_snapshot_usdc = market.last_kamino_snapshot_usdc
+            .saturating_sub(kamino_redeemed_usdc);
+    }
+    let combined_out: i64 = (catchup_amount as i64)
+        .checked_add(actual_delta.max(0))
+        .ok_or(AnemoneError::MathOverflow)?;
+    if combined_out > 0 {
+        market.lp_nav = market.lp_nav
+            .checked_sub(combined_out as u64)
+            .ok_or(AnemoneError::MathOverflow)?;
+    }
+    if actual_delta < 0 {
+        market.lp_nav = market.lp_nav
+            .checked_add((-actual_delta) as u64)
+            .ok_or(AnemoneError::MathOverflow)?;
+    }
+    match direction {
+        SwapDirection::PayFixed => {
+            market.total_fixed_notional = market.total_fixed_notional
+                .checked_sub(notional)
+                .ok_or(AnemoneError::MathOverflow)?;
+        }
+        SwapDirection::ReceiveFixed => {
+            market.total_variable_notional = market.total_variable_notional
+                .checked_sub(notional)
+                .ok_or(AnemoneError::MathOverflow)?;
+        }
+    }
+    market.total_open_positions = market.total_open_positions
+        .checked_sub(1)
+        .ok_or(AnemoneError::MathOverflow)?;
+
+    msg!(
+        "Liquidated: treasury={} liquidator={} remainder={} (liquidator_addr={}, owner={})",
+        treasury_share, liquidator_share, remainder,
+        ctx.accounts.liquidator.key(), ctx.accounts.owner.key()
+    );
+
+    Ok(())
+}
+
+/// Computes the three-way split of `collateral_mtm` at liquidation:
+/// `(treasury_share, liquidator_share, remainder_to_owner)`.
+///
+/// The total fee is `collateral_mtm × liquidation_fee_bps / 10_000` (3% on
+/// MVP defaults). Of that, 1/3 goes to the treasury and 2/3 to the liquidator
+/// — the liquidator gets the bulk as the MEV incentive that keeps positions
+/// from going more underwater than necessary; the treasury captures the
+/// protocol's cut. The non-fee remainder returns to the owner.
+///
+/// Pure function so the split math can be unit-tested without mocking
+/// Anchor accounts. Caller in the handler decides whether to skip
+/// transfers when shares round to zero.
+pub fn compute_liquidation_split(
+    collateral_mtm: u64,
+    liquidation_fee_bps: u16,
+) -> Result<(u64, u64, u64)> {
+    let total_fee = (collateral_mtm as u128)
+        .checked_mul(liquidation_fee_bps as u128)
+        .and_then(|v| v.checked_div(10_000))
+        .ok_or(AnemoneError::MathOverflow)? as u64;
+    let treasury_share = total_fee / 3;
+    let liquidator_share = total_fee
+        .checked_sub(treasury_share)
+        .ok_or(AnemoneError::MathOverflow)?;
+    let remainder = collateral_mtm
+        .checked_sub(total_fee)
+        .ok_or(AnemoneError::MathOverflow)?;
+    Ok((treasury_share, liquidator_share, remainder))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn three_pct_fee_splits_one_to_two() {
+        // collateral_mtm = $1000 = 1_000_000_000 raw, fee_bps = 300 (3%)
+        // total_fee = 30_000_000, treasury = 10_000_000, liquidator = 20_000_000
+        let (treasury, liquidator, remainder) =
+            compute_liquidation_split(1_000_000_000, 300).unwrap();
+        assert_eq!(treasury, 10_000_000, "treasury = total_fee / 3");
+        assert_eq!(liquidator, 20_000_000, "liquidator = total_fee - treasury");
+        assert_eq!(remainder, 970_000_000, "owner = collateral - total_fee");
+        assert_eq!(treasury + liquidator, 30_000_000, "shares sum to total_fee");
+        assert_eq!(treasury + liquidator + remainder, 1_000_000_000, "no value lost");
+    }
+
+    #[test]
+    fn split_handles_odd_total_fee() {
+        // total_fee = 100 → treasury = 33, liquidator = 67 (rounds toward liquidator)
+        // collateral_mtm = 100 / 0.03 = 3333 + remainder → use 100_000 raw, fee_bps = 100 (1%)
+        // total_fee = 1_000, treasury = 333, liquidator = 667
+        let (treasury, liquidator, remainder) =
+            compute_liquidation_split(100_000, 100).unwrap();
+        assert_eq!(treasury, 333);
+        assert_eq!(liquidator, 667);
+        assert_eq!(remainder, 99_000);
+        assert_eq!(treasury + liquidator, 1_000, "rounding goes to liquidator");
+    }
+
+    #[test]
+    fn small_total_fee_rounds_treasury_to_zero() {
+        // total_fee < 3 → treasury = 0, liquidator gets all of it
+        // collateral_mtm = 50, fee_bps = 300 → total_fee = 50 × 300 / 10_000 = 1
+        let (treasury, liquidator, remainder) =
+            compute_liquidation_split(50, 300).unwrap();
+        assert_eq!(treasury, 0, "1 / 3 = 0 in integer math");
+        assert_eq!(liquidator, 1, "liquidator gets the lone unit");
+        assert_eq!(remainder, 49);
+    }
+
+    #[test]
+    fn zero_collateral_returns_zero_everything() {
+        let (treasury, liquidator, remainder) = compute_liquidation_split(0, 300).unwrap();
+        assert_eq!(treasury, 0);
+        assert_eq!(liquidator, 0);
+        assert_eq!(remainder, 0);
+    }
+
+    #[test]
+    fn zero_fee_bps_pays_owner_entirely() {
+        let (treasury, liquidator, remainder) =
+            compute_liquidation_split(1_000_000, 0).unwrap();
+        assert_eq!(treasury, 0);
+        assert_eq!(liquidator, 0);
+        assert_eq!(remainder, 1_000_000, "no fee → owner gets 100%");
+    }
+
+    #[test]
+    fn liquidator_never_receives_less_than_treasury() {
+        // Property: for any inputs, liquidator_share >= treasury_share. This
+        // is the "1:2 split" invariant; if math regresses, this catches it.
+        for collateral in [1_u64, 100, 10_000, 1_000_000, u64::MAX / 10_000] {
+            for bps in [1_u16, 100, 300, 500, 1_000] {
+                let (t, l, _r) = compute_liquidation_split(collateral, bps).unwrap();
+                assert!(l >= t, "liquidator {} < treasury {} for collat={}, bps={}", l, t, collateral, bps);
+            }
+        }
+    }
+
+    #[test]
+    fn no_value_creation_or_loss() {
+        // Property: treasury + liquidator + remainder == collateral_mtm always
+        for collateral in [50_u64, 1_000, 100_000, 10_000_000] {
+            for bps in [0_u16, 100, 300, 500, 1_000] {
+                let (t, l, r) = compute_liquidation_split(collateral, bps).unwrap();
+                assert_eq!(t + l + r, collateral, "value drift for collat={}, bps={}", collateral, bps);
+            }
+        }
+    }
+}

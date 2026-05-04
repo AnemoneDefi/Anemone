@@ -8,6 +8,9 @@ skip-lint = false
 [programs.localnet]
 anemone = "KQs6ci5FtedFKPVJThAZSMMXyosK4TvnF7kcDSx5Jwd"
 
+[programs.devnet]
+anemone = "KQs6ci5FtedFKPVJThAZSMMXyosK4TvnF7kcDSx5Jwd"
+
 [registry]
 url = "https://api.apr.dev"
 
@@ -18,6 +21,7 @@ wallet = "~/.config/solana/id.json"
 [test.validator]
 url = "https://api.mainnet-beta.solana.com"
 bind_address = "127.0.0.1"
+startup_wait = 30000
 
 # Kamino K-Lend program — bytecode clonado de mainnet
 [[test.validator.clone]]
