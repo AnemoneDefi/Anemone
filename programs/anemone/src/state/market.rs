@@ -68,6 +68,17 @@ pub struct SwapMarket {
 
     pub status: u8,
     pub bump: u8,
+
+    // v0.1 mainnet caps. Both can be updated by admin via `set_market_caps`.
+    // Set to `u64::MAX` to disable a cap.
+    /// Hard cap on `lp_nav`. `deposit_liquidity` rejects when the resulting
+    /// NAV would exceed this. Lets a fresh market grow gradually instead of
+    /// absorbing one large depositor up to its theoretical limit.
+    pub max_lp_nav: u64,
+    /// Hard cap on a single trader's `notional` at `open_swap`. Limits the
+    /// blast radius of any single position — even with a healthy pool, no
+    /// trader can open beyond this size.
+    pub max_position_notional: u64,
 }
 
 impl SwapMarket {
@@ -97,5 +108,7 @@ impl SwapMarket {
         + 8    // last_kamino_snapshot_usdc
         + 8    // last_kamino_sync_ts
         + 1    // status
-        + 1;   // bump
+        + 1    // bump
+        + 8    // max_lp_nav
+        + 8;   // max_position_notional
 }

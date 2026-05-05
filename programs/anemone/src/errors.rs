@@ -56,4 +56,8 @@ pub enum AnemoneError {
     UnpaidPnlOutstanding,
     #[msg("Protocol is paused — admin has blocked new swaps and LP deposits")]
     ProtocolPaused,
+    #[msg("Deposit would exceed the market's LP NAV cap")]
+    PoolCapExceeded,
+    #[msg("Position notional exceeds the market's per-trade cap")]
+    PositionCapExceeded,
 }

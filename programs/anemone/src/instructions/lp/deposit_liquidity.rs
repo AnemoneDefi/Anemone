@@ -114,6 +114,12 @@ pub fn handle_deposit_liquidity(
 
     require!(shares > 0, AnemoneError::InvalidAmount);
 
+    // v0.1 mainnet pool cap. `max_lp_nav == u64::MAX` disables the cap.
+    let nav_after = market.lp_nav
+        .checked_add(amount)
+        .ok_or(AnemoneError::MathOverflow)?;
+    require!(nav_after <= market.max_lp_nav, AnemoneError::PoolCapExceeded);
+
     // Step 2: Transfer USDC from depositor → lp_vault
     transfer_checked(
         CpiContext::new(

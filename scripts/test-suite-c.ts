@@ -157,7 +157,14 @@ async function createMarketWithTenor(ctx: Ctx, tenorSeconds: number): Promise<Ma
   if (exists) return { marketPda, lpVaultPda, collateralVaultPda, kaminoDepositPda, lpMintPda, tenor };
 
   await ctx.program.methods
-    .createMarket(tenor, SETTLEMENT_PERIOD_SECONDS, MAX_UTILIZATION_BPS, BASE_SPREAD_BPS)
+    .createMarket(
+      tenor,
+      SETTLEMENT_PERIOD_SECONDS,
+      MAX_UTILIZATION_BPS,
+      BASE_SPREAD_BPS,
+      new anchor.BN("18446744073709551615"),
+      new anchor.BN("18446744073709551615"),
+    )
     .accountsStrict({
       protocolState: ctx.protocolStatePda,
       market: marketPda,
@@ -739,7 +746,14 @@ async function testA10(ctx: Ctx) {
   const exists = await ctx.connection.getAccountInfo(marketPda);
   if (!exists) {
     await ctx.program.methods
-      .createMarket(tenor, new anchor.BN(30), MAX_UTILIZATION_BPS, 500) // 30s settle, 5% spread
+      .createMarket(
+        tenor,
+        new anchor.BN(30),
+        MAX_UTILIZATION_BPS,
+        500,
+        new anchor.BN("18446744073709551615"),
+        new anchor.BN("18446744073709551615"),
+      ) // 30s settle, 5% spread
       .accountsStrict({
         protocolState: ctx.protocolStatePda,
         market: marketPda,
