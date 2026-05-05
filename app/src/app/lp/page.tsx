@@ -477,20 +477,43 @@ function DepositCard({ market, protocol, lpPosition, refresh }: DepositCardProps
     reset();
     setPending(true);
     try {
-      const kamino = await resolveKaminoCpiAccounts(
-        connection,
-        new PublicKey(market.underlyingReserve)
-      );
+      const reserve = new PublicKey(market.underlyingReserve);
+      const kamino = await resolveKaminoCpiAccounts(connection, reserve);
       const client = buildClient(anchorWallet);
+      const marketPda = new PublicKey(market.publicKey);
+      const kaminoDepositAccount = new PublicKey(market.kaminoDepositAccount);
+
+      // Bundle refresh_reserve + sync_kamino_yield so request_withdrawal's
+      // MAX_NAV_STALENESS_SECS gate passes. Same pattern as deposit.
+      const preInstructions: TransactionInstruction[] = [
+        buildRefreshReserveIx(reserve),
+      ];
+      const syncIx = await client.program.methods
+        .syncKaminoYield()
+        .accountsStrict({
+          market: marketPda,
+          kaminoReserve: reserve,
+          kaminoDepositAccount,
+          kaminoLendingMarket: KAMINO_USDC_LENDING_MARKET,
+          pythOracle: KAMINO_PROGRAM_ID,
+          switchboardPriceOracle: KAMINO_PROGRAM_ID,
+          switchboardTwapOracle: KAMINO_PROGRAM_ID,
+          scopePrices: KAMINO_SCOPE_PRICES,
+          kaminoProgram: KAMINO_PROGRAM_ID,
+          tokenProgram: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
+        })
+        .instruction();
+      preInstructions.push(syncIx);
+
       const result = await client.lp.requestWithdrawal.execute({
         withdrawer: anchorWallet.publicKey,
-        market: new PublicKey(market.publicKey),
+        market: marketPda,
         underlyingMint: new PublicKey(market.underlyingMint),
         lpMint: new PublicKey(market.lpMint),
         lpVault: new PublicKey(market.lpVault),
         treasury: new PublicKey(protocol.treasury),
         sharesToBurn: sh,
-        kaminoReserve: new PublicKey(market.underlyingReserve),
+        kaminoReserve: reserve,
         kaminoLendingMarket: kamino.kaminoLendingMarket,
         kaminoLendingMarketAuthority: kamino.kaminoLendingMarketAuthority,
         reserveLiquidityMint: new PublicKey(market.underlyingMint),
@@ -500,6 +523,7 @@ function DepositCard({ market, protocol, lpPosition, refresh }: DepositCardProps
         // For Token-2022 underlyings these need to come from market state.
         collateralTokenProgram: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
         liquidityTokenProgram: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
+        preInstructions,
       });
       setSignature(result.signature);
       setShares("");
