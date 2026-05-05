@@ -229,8 +229,8 @@ async function main() {
   console.log(`  rate_index after first call: ${m1.currentRateIndex.toString()}`);
   console.log(`  last_rate_update_ts: ${m1.lastRateUpdateTs.toNumber()}`);
 
-  console.log("\n  waiting 3s for second snapshot to be temporally distinct...");
-  await new Promise((r) => setTimeout(r, 3000));
+  console.log("\n  waiting 10s for second snapshot to be temporally distinct (MIN_RATE_UPDATE_ELAPSED_SECS=8)...");
+  await new Promise((r) => setTimeout(r, 10000));
 
   console.log("\n--- update_rate_index (REAL Kamino CPI — second call, rotates previous)");
   // Surfpool forks Kamino state at a single slot; without refresh_reserve the

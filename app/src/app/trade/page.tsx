@@ -91,9 +91,8 @@ function settlementCadence(seconds: bigint): string {
   return `Every ${Math.round(n / 60)}m`;
 }
 
-function randomU32(): number {
-  // 32-bit unsigned, avoid 0 for more readable signatures.
-  return Math.floor(Math.random() * 0xffff_fffe) + 1;
+function randomNonce(): number {
+  return Math.floor(Math.random() * 254) + 1;
 }
 
 interface MarketDerived {
@@ -703,7 +702,7 @@ function ControlledOrderTicket({
         collateralVault: new PublicKey(market.collateralVault),
         direction,
         notional,
-        nonce: randomU32(),
+        nonce: randomNonce(),
         maxRateBps,
         minRateBps,
       });
