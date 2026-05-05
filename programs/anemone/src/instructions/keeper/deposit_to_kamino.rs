@@ -139,6 +139,7 @@ pub fn handle_deposit_to_kamino(
         .ok_or(AnemoneError::MathOverflow)?;
 
     msg!("Deposited {} USDC to Kamino", amount);
+    msg!("Market: {}", market.key());
 
     Ok(())
 }

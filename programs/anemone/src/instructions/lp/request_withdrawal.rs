@@ -358,6 +358,7 @@ pub fn handle_request_withdrawal(
         actual_shares_burned, net_amount, fee, kamino_redeemed_usdc,
         actual_gross < requested_gross,
     );
+    msg!("Market: {}", market.key());
 
     Ok(())
 }

@@ -145,6 +145,7 @@ pub fn handle_withdraw_from_kamino(
         "Withdrew {} k-tokens from Kamino ({} USDC delivered)",
         collateral_amount, usdc_delivered,
     );
+    msg!("Market: {}", market.key());
 
     Ok(())
 }
