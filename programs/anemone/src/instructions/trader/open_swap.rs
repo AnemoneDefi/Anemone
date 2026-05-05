@@ -106,6 +106,12 @@ pub fn handle_open_swap(
 
     require!(!protocol_state.paused, AnemoneError::ProtocolPaused);
 
+    // v0.1 mainnet per-position cap. `max_position_notional == u64::MAX` disables it.
+    require!(
+        notional <= market.max_position_notional,
+        AnemoneError::PositionCapExceeded,
+    );
+
     // 1. Validate rate index has been initialized by keeper
     require!(
         market.current_rate_index > 0 && market.previous_rate_index > 0,
