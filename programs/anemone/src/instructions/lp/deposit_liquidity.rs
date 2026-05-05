@@ -186,6 +186,7 @@ pub fn handle_deposit_liquidity(
         .ok_or(AnemoneError::MathOverflow)?;
 
     msg!("Deposit: {} USDC -> {} shares", amount, shares);
+    msg!("Market: {}", market.key());
 
     Ok(())
 }

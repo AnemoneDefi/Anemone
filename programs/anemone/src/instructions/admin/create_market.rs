@@ -194,6 +194,7 @@ pub fn handle_create_market(
 
     msg!("Market created: tenor={}s, spread={}bps, max_util={}bps, max_lp_nav={}, max_position_notional={}",
         tenor_seconds, base_spread_bps, max_utilization_bps, max_lp_nav, max_position_notional);
+    msg!("Market: {}", market.key());
 
     Ok(())
 }
