@@ -2,10 +2,11 @@ import { AnchorProvider, Program, Wallet, Idl } from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import { KeeperConfig } from "./config";
 
-// Lazy-loaded IDL + types. We copy anemone.json from the anchor build output
-// and import via require to keep the keeper independent of the monorepo tsconfig.
+// IDL is bundled at the keeper root so the package is deploy-self-contained
+// (Docker, Fly, Railway, etc). The same relative path resolves from both
+// `src/` under ts-node and `dist/` after `tsc`.
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const idl = require("../../target/idl/anemone.json") as Idl;
+const idl = require("../anemone.idl.json") as Idl;
 
 export interface KeeperClient {
   connection: Connection;

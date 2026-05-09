@@ -1,5 +1,4 @@
 import { PublicKey } from "@solana/web3.js";
-import bs58 from "bs58";
 import {
   createAssociatedTokenAccountIdempotent,
   getAssociatedTokenAddressSync,
@@ -10,9 +9,9 @@ import { deriveProtocolPda, deriveCollateralVaultPda, deriveLpVaultPda } from ".
 import { calculateMaintenanceMargin } from "../utils/margin";
 import { priorityFeeInstructions } from "../utils/priorityFee";
 import { logger } from "../utils/logger";
+import { fetchAllSafe } from "../utils/programAccounts";
 
-const STATUS_OFFSET = 185; // see settlement.ts for layout
-const STATUS_OPEN = 0;
+const SWAP_POSITION_SIZE = 198; // see settlement.ts for source of truth
 const TOKEN_PROGRAM = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 
 /**
@@ -25,21 +24,32 @@ export async function runLiquidation(
   config: KeeperConfig,
 ): Promise<void> {
   try {
-    const positions = await (client.program.account as any).swapPosition.all([
-      {
-        memcmp: {
-          offset: STATUS_OFFSET,
-          bytes: bs58.encode(Buffer.from([STATUS_OPEN])),
-        },
-      },
-    ]);
+    const positions = await fetchAllSafe<any>(
+      client.program,
+      "SwapPosition",
+      SWAP_POSITION_SIZE,
+    );
 
-    for (const { publicKey, account } of positions) {
+    // Same market scope as settlement — the keeper liquidates only the
+    // market it is configured for. Cross-market liquidation would require
+    // looking up each position's market account separately.
+    const ownMarket = config.marketPda.toBase58();
+    const open = positions.filter(
+      (p) =>
+        isOpen(p.account.status) &&
+        p.account.market.toBase58() === ownMarket,
+    );
+
+    for (const { publicKey, account } of open) {
       await tryLiquidate(client, config, publicKey, account);
     }
   } catch (err) {
     logger.error({ err }, "liquidation job failed");
   }
+}
+
+function isOpen(status: any): boolean {
+  return status != null && typeof status === "object" && "open" in status;
 }
 
 async function tryLiquidate(

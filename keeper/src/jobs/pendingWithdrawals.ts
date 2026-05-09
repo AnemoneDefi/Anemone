@@ -1,16 +1,13 @@
 import { PublicKey } from "@solana/web3.js";
-import bs58 from "bs58";
 import { getAccount } from "@solana/spl-token";
 import { KeeperClient } from "../client";
 import { KeeperConfig } from "../config";
 import { deriveLpVaultPda } from "../utils/pda";
 import { logger } from "../utils/logger";
+import { fetchAllSafe } from "../utils/programAccounts";
 
-// Offset of `status` in LpPosition. Layout:
-//   8 (disc) + 1 (is_initialized) + 32 (owner) + 32 (market)
-// + 8 (shares) + 8 (deposited_amount) = 89
-const STATUS_OFFSET_LP = 89;
-const STATUS_PENDING = 1; // LpStatus::PendingWithdrawal
+const LP_POSITION_SIZE = 91;     // see state/lp.rs LpPosition::SIZE
+const SWAP_POSITION_SIZE = 198;  // see state/position.rs SwapPosition::SIZE
 
 // Safety buffer on shortfall — we ask Kamino to return slightly more USDC
 // than strictly needed, so any newly-queued withdrawal that lands between
@@ -34,22 +31,24 @@ export async function runPendingWithdrawals(
   config: KeeperConfig,
 ): Promise<void> {
   try {
-    const pending = await (client.program.account as any).lpPosition.all([
-      {
-        memcmp: {
-          offset: STATUS_OFFSET_LP,
-          bytes: bs58.encode(Buffer.from([STATUS_PENDING])),
-        },
-      },
-    ]);
+    const allLp = await fetchAllSafe<any>(
+      client.program,
+      "LpPosition",
+      LP_POSITION_SIZE,
+    );
+    const pending = allLp.filter((p) => isPendingWithdrawal(p.account.status));
 
     // H1: also fetch SwapPositions with unpaid_pnl > 0. The field is the
     // 13th in the struct so the memcmp-by-status trick doesn't apply —
     // fetch all positions and filter client-side. Good enough for MVP;
     // mainnet should index via Helius/Geyser to avoid the full scan.
-    const allPositions = await (client.program.account as any).swapPosition.all();
+    const allPositions = await fetchAllSafe<any>(
+      client.program,
+      "SwapPosition",
+      SWAP_POSITION_SIZE,
+    );
     const unpaidPositions = allPositions.filter(
-      (p: any) => BigInt(p.account.unpaidPnl?.toString?.() ?? "0") > 0n,
+      (p) => BigInt(p.account.unpaidPnl?.toString?.() ?? "0") > 0n,
     );
 
     if (pending.length === 0 && unpaidPositions.length === 0) {
@@ -149,4 +148,17 @@ export async function runPendingWithdrawals(
   } catch (err) {
     logger.error({ err }, "pending-withdrawals job failed");
   }
+}
+
+// LpPosition.status currently has variants Active and Withdrawn. The legacy
+// "PendingWithdrawal" variant the keeper used to wait on no longer exists in
+// the on-chain model — once LpPosition is re-extended with a queue path,
+// update this matcher accordingly. Until then this returns false for every
+// account and the LP refill block stays dormant.
+function isPendingWithdrawal(status: any): boolean {
+  return (
+    status != null &&
+    typeof status === "object" &&
+    ("pendingWithdrawal" in status)
+  );
 }
