@@ -322,6 +322,21 @@ footer.mini .wrap {
   font-weight: 500;
 }
 
+.landing-root .eyebrow .version-chip {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 12px;
+  padding: 2px 8px;
+  border: 1px solid rgba(236, 72, 153, 0.4);
+  border-radius: 4px;
+  background: rgba(236, 72, 153, 0.08);
+  color: #ec4899;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: lowercase;
+}
+
 .landing-root .muted-2 { color: var(--text-3); }
 
 .landing-root .grad-text { color: var(--pink); }
@@ -497,18 +512,9 @@ footer.mini .wrap {
   opacity: 0.9;
 }
 
-.landing-root .hero-mock .frame {
-  position: absolute;
-  inset: 0;
-  border: 1px dashed var(--border-strong);
-  background: var(--surface-2);
-  border-radius: 6px;
-  z-index: 1;
-}
-
 .landing-root .dashcard {
   position: absolute;
-  inset: 24px;
+  inset: 0;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -1078,7 +1084,44 @@ footer.mini .wrap {
   padding: 28px;
   transition: border-color 0.25s ease, transform 0.25s ease, box-shadow 0.25s ease;
   position: relative;
+  overflow: hidden;
 }
+
+/* Tinted top-band per theme so cards aren't all neutral after icons removed.
+   Subtle so the page palette stays calm; hover deepens the same hue. */
+.landing-root .sol-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: var(--accent, transparent);
+  opacity: 0.85;
+}
+
+.landing-root .sol-card.themed-pink {
+  --accent: #ec4899;
+  background:
+    linear-gradient(180deg, rgba(236, 72, 153, 0.06) 0%, rgba(236, 72, 153, 0) 60%),
+    var(--surface);
+}
+.landing-root .sol-card.themed-blue {
+  --accent: #3b82f6;
+  background:
+    linear-gradient(180deg, rgba(59, 130, 246, 0.06) 0%, rgba(59, 130, 246, 0) 60%),
+    var(--surface);
+}
+.landing-root .sol-card.themed-purple {
+  --accent: #a855f7;
+  background:
+    linear-gradient(180deg, rgba(168, 85, 247, 0.06) 0%, rgba(168, 85, 247, 0) 60%),
+    var(--surface);
+}
+
+.landing-root .sol-card.themed-pink h3 { color: #ec4899; }
+.landing-root .sol-card.themed-blue h3 { color: #3b82f6; }
+.landing-root .sol-card.themed-purple h3 { color: #c084fc; }
 
 .landing-root .sol-card:hover { transform: translateY(-2px); }
 
@@ -1145,19 +1188,47 @@ footer.mini .wrap {
 .landing-root .step { position: relative; }
 
 .landing-root .step .step-ph {
-  height: 120px;
-  border: 1px solid var(--border);
-  background: var(--surface-2);
-  border-radius: 6px;
+  height: 140px;
+  border: 1px dashed var(--border-strong);
+  background:
+    linear-gradient(135deg, rgba(59,130,246,.04) 0%, rgba(236,72,153,.04) 100%),
+    var(--surface-2);
+  border-radius: 8px;
   display: flex;
   align-items: center;
   justify-content: center;
   color: var(--text-3);
   font-family: 'JetBrains Mono', monospace;
-  font-size: 20px;
+  font-size: 56px;
+  font-weight: 200;
+  letter-spacing: -0.02em;
   margin-bottom: 20px;
   position: relative;
   z-index: 1;
+  overflow: hidden;
+}
+
+.landing-root .step .step-ph::before,
+.landing-root .step .step-ph::after {
+  content: "";
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--border-strong);
+}
+
+.landing-root .step .step-ph::before {
+  top: 8px;
+  left: 8px;
+  border-right: none;
+  border-bottom: none;
+}
+
+.landing-root .step .step-ph::after {
+  bottom: 8px;
+  right: 8px;
+  border-left: none;
+  border-top: none;
 }
 
 .landing-root .step .n {
@@ -1223,13 +1294,216 @@ footer.mini .wrap {
   background: var(--surface-2);
   border-radius: 8px;
   display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-3);
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 12px;
+  align-items: stretch;
+  justify-content: stretch;
+  padding: 28px;
+  overflow: hidden;
+}
+
+/* ───── Showcase mocks (Trade / LP / Portfolio) ───── */
+
+.landing-root .mock {
+  flex: 1;
+  display: flex;
   flex-direction: column;
-  gap: 8px;
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--text-2);
+  gap: 18px;
+}
+
+.landing-root .mock .blue { color: #3b82f6; }
+.landing-root .mock .pink { color: #ec4899; }
+
+/* Trade mock */
+.landing-root .mock-trade .mock-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+.landing-root .mock-trade .mock-tag {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: var(--text-3);
+  padding-top: 8px;
+}
+.landing-root .mock-trade .mock-rates { display: flex; gap: 24px; }
+.landing-root .mock-trade .mock-rates > div { display: flex; flex-direction: column; gap: 4px; }
+.landing-root .mock-trade .mock-rates .lbl {
+  font-size: 9px;
+  letter-spacing: 0.15em;
+  color: var(--text-3);
+}
+.landing-root .mock-trade .mock-rates .val {
+  font-size: 24px;
+  font-weight: 300;
+  letter-spacing: -0.02em;
+}
+.landing-root .mock-trade .mock-spark {
+  width: 100%;
+  height: 64px;
+  display: block;
+}
+.landing-root .mock-trade .mock-buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.landing-root .mock-trade .mock-btn {
+  border-radius: 6px;
+  padding: 12px 0;
+  text-align: center;
+  font-size: 11px;
+  letter-spacing: 0.15em;
+  border: 1px solid var(--border-strong);
+}
+.landing-root .mock-trade .mock-btn.pink {
+  background: rgba(236, 72, 153, 0.12);
+  border-color: rgba(236, 72, 153, 0.4);
+  color: #ec4899;
+}
+.landing-root .mock-trade .mock-btn.ghost {
+  color: var(--text-2);
+}
+.landing-root .mock-trade .mock-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--text-3);
+  align-items: center;
+  margin-top: auto;
+}
+.landing-root .mock-trade .mock-meta b { color: var(--text); font-weight: 500; }
+.landing-root .mock-trade .mock-meta .dot { color: var(--text-3); opacity: 0.5; }
+
+/* LP mock */
+.landing-root .mock-lp { justify-content: center; gap: 20px; }
+.landing-root .mock-lp .mock-stream {
+  display: grid;
+  grid-template-columns: 130px 1fr 60px;
+  align-items: center;
+  gap: 14px;
+}
+.landing-root .mock-lp .stream-lbl {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: var(--text-3);
+}
+.landing-root .mock-lp .stream-bar {
+  height: 6px;
+  background: var(--surface);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.landing-root .mock-lp .stream-fill {
+  height: 100%;
+  border-radius: 3px;
+}
+.landing-root .mock-lp .stream-fill.blue { background: #3b82f6; }
+.landing-root .mock-lp .stream-fill.pink { background: #ec4899; }
+.landing-root .mock-lp .stream-val {
+  text-align: right;
+  font-size: 16px;
+  font-weight: 300;
+}
+/* Math-style "+" between the two yield streams. Cleaner than the previous
+   curve-merge SVG, which read as a single glitched line instead of two
+   sources combining. */
+.landing-root .mock-lp .mock-plus {
+  text-align: center;
+  font-size: 22px;
+  font-weight: 200;
+  color: var(--text-3);
+  line-height: 1;
+  margin: -8px 0;
+  font-family: 'JetBrains Mono', monospace;
+}
+.landing-root .mock-lp .mock-total {
+  border-top: 1px dashed var(--border);
+  padding-top: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.landing-root .mock-lp .total-lbl {
+  font-size: 10px;
+  letter-spacing: 0.15em;
+  color: var(--text-3);
+}
+.landing-root .mock-lp .total-val {
+  font-size: 36px;
+  font-weight: 200;
+  letter-spacing: -0.02em;
+  background: linear-gradient(90deg, #3b82f6, #ec4899);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.landing-root .mock-lp .total-sub {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+/* Portfolio mock */
+.landing-root .mock-portfolio { gap: 14px; }
+.landing-root .mock-portfolio .pos-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.landing-root .mock-portfolio .pos-tag {
+  font-size: 10px;
+  padding: 4px 10px;
+  border-radius: 4px;
+  letter-spacing: 0.12em;
+  border: 1px solid rgba(236, 72, 153, 0.4);
+  color: #ec4899;
+  background: rgba(236, 72, 153, 0.1);
+}
+.landing-root .mock-portfolio .pos-meta {
+  font-size: 11px;
+  color: var(--text-3);
+}
+.landing-root .mock-portfolio .pos-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  align-items: baseline;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+  gap: 12px;
+}
+.landing-root .mock-portfolio .pos-row:last-of-type { border-bottom: none; }
+.landing-root .mock-portfolio .pos-k {
+  font-size: 11px;
+  color: var(--text-3);
+  letter-spacing: 0.08em;
+}
+.landing-root .mock-portfolio .pos-v {
+  font-size: 14px;
+  color: var(--text);
+}
+.landing-root .mock-portfolio .pos-v.positive {
+  color: #22c55e;
+  font-weight: 500;
+}
+.landing-root .mock-portfolio .pos-sub {
+  font-size: 10px;
+  color: var(--text-3);
+  text-align: right;
+}
+.landing-root .mock-portfolio .pos-progress {
+  height: 4px;
+  background: var(--surface);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-top: 4px;
+}
+.landing-root .mock-portfolio .pos-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #3b82f6, #ec4899);
+  border-radius: 2px;
 }
 
 .landing-root .show-copy h3 {
@@ -1373,6 +1647,41 @@ footer.mini .wrap {
   color: var(--text-2);
 }
 
+/* Center the column data AND the column headers above them so the ✓/✗
+   marks line up under their titles. The first column (row-k) stays left. */
+.landing-root .cmp tbody td:not(.row-k),
+.landing-root .cmp thead th:not(:first-child) {
+  text-align: center;
+}
+
+.landing-root .cmp .cmp-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+}
+
+/* Default ✓ — used by competitors. Muted neutral so the competitor
+   columns don't visually compete with the Anemone column. */
+.landing-root .cmp .cmp-yes {
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-3);
+}
+
+/* Anemone column ✓ — pink, the column already has a pink rail and tinted
+   background so the check inherits the same identity. */
+.landing-root .cmp .col-us .cmp-yes {
+  background: rgba(236, 72, 153, 0.18);
+  color: #ec4899;
+}
+
+.landing-root .cmp .cmp-no {
+  color: var(--text-3);
+  opacity: 0.5;
+}
+
 /* Trust */
 .landing-root .trust-strip {
   display: flex;
@@ -1400,6 +1709,24 @@ footer.mini .wrap {
   font-family: 'JetBrains Mono', monospace;
   font-size: 10px;
   letter-spacing: 0.08em;
+}
+
+.landing-root .logo-img {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.landing-root .logo-img img {
+  display: block;
+  width: auto;
+  height: auto;
+  max-height: 28px;
+  object-fit: contain;
+}
+
+.landing-root .trust-strip .logo-img.trust-logo img {
+  max-height: 32px;
 }
 
 .landing-root .trust-intro {
