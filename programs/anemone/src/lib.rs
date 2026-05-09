@@ -55,6 +55,10 @@ pub mod anemone {
         instructions::admin::set_keeper::handle_set_keeper(ctx, new_keeper)
     }
 
+    pub fn update_treasury(ctx: Context<UpdateTreasury>) -> Result<()> {
+        instructions::admin::update_treasury::handle_update_treasury(ctx)
+    }
+
     pub fn set_market_caps(
         ctx: Context<SetMarketCaps>,
         max_lp_nav: u64,
