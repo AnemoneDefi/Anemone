@@ -3,6 +3,7 @@ use anchor_spl::token_interface::{
     Mint, TokenAccount, TokenInterface,
     transfer_checked, TransferChecked,
 };
+#[cfg(not(feature = "stub-oracle"))]
 use kamino_lend::state::Reserve;
 use crate::state::{SwapMarket, SwapPosition, SwapDirection, PositionStatus, ProtocolState};
 use crate::helpers::{calculate_maintenance_margin, calculate_period_pnl};
@@ -216,10 +217,15 @@ pub fn handle_liquidate_position(ctx: Context<LiquidatePosition>) -> Result<()> 
     // (was passing USDC as collateral_amount). Cap at actual k-USDC held;
     // if cap binds, the transfer below moves what we have and the residual
     // becomes unpaid_pnl, deferring full liquidation pay-out until rebalance.
+    // total_lp_drain and kamino_redeemed_usdc are only consumed in the
+    // non-stub redeem branch below. In stub-oracle builds they're computed
+    // but never read; allow both warnings rather than gating each line.
+    #[allow(unused_variables, unused_mut)]
     let total_lp_drain: u64 = (position.unpaid_pnl.max(0) as u64)
         .checked_add(pnl.max(0) as u64)
         .ok_or(AnemoneError::MathOverflow)?;
     let lp_vault_balance = ctx.accounts.lp_vault.amount;
+    #[allow(unused_mut)]
     let mut kamino_redeemed_usdc: u64 = 0;
     let _ = lp_vault_balance; // referenced only in non-stub branch below
     // Stub-oracle builds skip the Kamino redeem. Shortfall remains as

@@ -3,6 +3,7 @@ use anchor_spl::token_interface::{
     Mint, TokenAccount, TokenInterface,
     burn, transfer_checked, Burn, TransferChecked,
 };
+#[cfg(not(feature = "stub-oracle"))]
 use kamino_lend::state::Reserve;
 use crate::state::{SwapMarket, LpPosition, LpStatus, ProtocolState, MAX_NAV_STALENESS_SECS};
 #[cfg(not(feature = "stub-oracle"))]
@@ -230,6 +231,10 @@ pub fn handle_request_withdrawal(
     //      we burn shares and decrement state proportionally so the unpaid
     //      portion remains backed by the LP's residual shares (they can
     //      withdraw it later once a keeper rebalance refills the pool).
+    // `mut` is unused in stub-oracle builds where the redemption path below
+    // is compiled out. Allow the warning here so both feature configurations
+    // build clean.
+    #[allow(unused_mut)]
     let mut kamino_redeemed_usdc: u64 = 0;
     // In stub-oracle builds (devnet/localnet) Kamino is not deployed, so
     // there are no k-tokens to redeem. lp_vault holds 100% of LP capital;

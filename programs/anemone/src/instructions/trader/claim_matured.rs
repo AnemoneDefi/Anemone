@@ -3,6 +3,7 @@ use anchor_spl::token_interface::{
     Mint, TokenAccount, TokenInterface,
     transfer_checked, TransferChecked,
 };
+#[cfg(not(feature = "stub-oracle"))]
 use kamino_lend::state::Reserve;
 use crate::state::{SwapMarket, SwapPosition, SwapDirection, PositionStatus};
 use crate::errors::AnemoneError;
@@ -160,6 +161,10 @@ pub fn handle_claim_matured(ctx: Context<ClaimMatured>) -> Result<()> {
     // binds, the catchup below transfers what we have and any remainder
     // becomes unpaid_pnl, deferring the trader's claim until a keeper
     // refills the pool.
+    // `mut` is unused in stub-oracle builds where the redeem path below is
+    // compiled out. Allow the warning here so both feature configurations
+    // build clean.
+    #[allow(unused_mut)]
     let mut kamino_redeemed_usdc: u64 = 0;
     // Stub-oracle builds (devnet/localnet) skip the Kamino redeem — lp_vault
     // is the only LP capital pool. Shortfall remains as unpaid_pnl per the

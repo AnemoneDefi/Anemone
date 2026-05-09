@@ -94,7 +94,7 @@ pub fn handle_withdraw_from_kamino(
     // without touching state so a stray call is a clear no-op.
     #[cfg(feature = "stub-oracle")]
     {
-        let _ = collateral_amount;
+        let _ = (&ctx, collateral_amount);
         msg!("withdraw_from_kamino: skipped (stub-oracle build)");
         return Ok(());
     }

@@ -98,7 +98,7 @@ pub fn handle_deposit_to_kamino(
     // confusing CPI failure.
     #[cfg(feature = "stub-oracle")]
     {
-        let _ = amount; // silence unused-variable in stub
+        let _ = (&ctx, amount); // silence unused-variable in stub
         msg!("deposit_to_kamino: skipped (stub-oracle build)");
         return Ok(());
     }

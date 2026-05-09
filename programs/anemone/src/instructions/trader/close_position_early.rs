@@ -3,6 +3,7 @@ use anchor_spl::token_interface::{
     Mint, TokenAccount, TokenInterface,
     transfer_checked, TransferChecked,
 };
+#[cfg(not(feature = "stub-oracle"))]
 use kamino_lend::state::Reserve;
 use crate::state::{SwapMarket, SwapPosition, SwapDirection, PositionStatus, ProtocolState};
 use crate::helpers::calculate_period_pnl;
@@ -192,10 +193,15 @@ pub fn handle_close_position_early(ctx: Context<ClosePositionEarly>) -> Result<(
     //     over-redeeming by 1/exchange_rate). Cap at actual k-USDC held;
     //     if the cap binds, the transfers below leave a residual that the
     //     final UnpaidPnlOutstanding check rejects, deferring the close.
+    // total_lp_drain and kamino_redeemed_usdc are only consumed in the
+    // non-stub redeem branch below. Allow the warnings on both feature
+    // configurations.
+    #[allow(unused_variables, unused_mut)]
     let total_lp_drain: u64 = (position.unpaid_pnl.max(0) as u64)
         .checked_add(pnl.max(0) as u64)
         .ok_or(AnemoneError::MathOverflow)?;
     let lp_vault_balance = ctx.accounts.lp_vault.amount;
+    #[allow(unused_mut)]
     let mut kamino_redeemed_usdc: u64 = 0;
     let _ = lp_vault_balance; // referenced only in non-stub branch below
     // Stub-oracle builds skip the Kamino redeem. Shortfall surfaces at the
