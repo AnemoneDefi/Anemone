@@ -191,7 +191,14 @@ async function main() {
     console.log("  already exists");
   } else {
     const tx = await program.methods
-      .createMarket(TENOR_SECONDS, SETTLEMENT_PERIOD_SECONDS, MAX_UTILIZATION_BPS, BASE_SPREAD_BPS)
+      .createMarket(
+        TENOR_SECONDS,
+        SETTLEMENT_PERIOD_SECONDS,
+        MAX_UTILIZATION_BPS,
+        BASE_SPREAD_BPS,
+        new anchor.BN("18446744073709551615"), // u64::MAX — caps disabled in surfpool
+        new anchor.BN("18446744073709551615"),
+      )
       .accountsStrict({
         protocolState: protocolStatePda,
         market: marketPda,

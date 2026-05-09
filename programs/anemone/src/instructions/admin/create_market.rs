@@ -112,6 +112,8 @@ pub fn handle_create_market(
     settlement_period_seconds: i64,
     max_utilization_bps: u16,
     base_spread_bps: u16,
+    max_lp_nav: u64,
+    max_position_notional: u64,
 ) -> Result<()> {
     require!(tenor_seconds > 0, AnemoneError::ParamOutOfRange);
     require!(
@@ -123,6 +125,9 @@ pub fn handle_create_market(
         AnemoneError::ParamOutOfRange,
     );
     require!(base_spread_bps <= MAX_BASE_SPREAD_BPS, AnemoneError::ParamOutOfRange);
+    // Both caps must be > 0. Use u64::MAX to effectively disable.
+    require!(max_lp_nav > 0, AnemoneError::ParamOutOfRange);
+    require!(max_position_notional > 0, AnemoneError::ParamOutOfRange);
 
     // H7: restrict the underlying to classic SPL Token mints. Token-2022
     // extensions (TransferHook, PermanentDelegate, TransferFee, DefaultAccountState
@@ -180,11 +185,16 @@ pub fn handle_create_market(
     market.status = 0;
     market.bump = ctx.bumps.market;
 
+    // v0.1 caps
+    market.max_lp_nav = max_lp_nav;
+    market.max_position_notional = max_position_notional;
+
     // Increment market counter
     protocol_state.total_markets += 1;
 
-    msg!("Market created: tenor={}s, spread={}bps, max_util={}bps",
-        tenor_seconds, base_spread_bps, max_utilization_bps);
+    msg!("Market created: tenor={}s, spread={}bps, max_util={}bps, max_lp_nav={}, max_position_notional={}",
+        tenor_seconds, base_spread_bps, max_utilization_bps, max_lp_nav, max_position_notional);
+    msg!("Market: {}", market.key());
 
     Ok(())
 }

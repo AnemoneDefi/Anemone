@@ -46,6 +46,9 @@ describe("anemone", () => {
 
   const TENOR_SECONDS = new anchor.BN(2_592_000); // 30 days
 
+  // u64::MAX disables both v0.1 caps for tests that don't exercise them.
+  const UNCAPPED = new anchor.BN("18446744073709551615");
+
   before(async () => {
     // Derive PDAs
     [protocolStatePda] = PublicKey.findProgramAddressSync(
@@ -208,6 +211,8 @@ describe("anemone", () => {
           new anchor.BN(86_400),
           6000,
           80,
+          UNCAPPED,
+          UNCAPPED,
         )
         .accountsStrict({
           protocolState: protocolStatePda,
@@ -306,6 +311,8 @@ describe("anemone", () => {
             new anchor.BN(86_400),
             6000,
             80,
+            UNCAPPED,
+            UNCAPPED,
           )
           .accountsStrict({
             protocolState: protocolStatePda,
@@ -355,7 +362,7 @@ describe("anemone", () => {
 
       try {
         await program.methods
-          .createMarket(params.tenor, params.settle, params.util, params.spread)
+          .createMarket(params.tenor, params.settle, params.util, params.spread, UNCAPPED, UNCAPPED)
           .accountsStrict({
             protocolState: protocolStatePda,
             market: mkt,
@@ -446,7 +453,7 @@ describe("anemone", () => {
 
       try {
         await program.methods
-          .createMarket(tenor, new anchor.BN(86_400), 6000, 80)
+          .createMarket(tenor, new anchor.BN(86_400), 6000, 80, UNCAPPED, UNCAPPED)
           .accountsStrict({
             protocolState: protocolStatePda,
             market: mkt,
@@ -527,6 +534,8 @@ describe("anemone", () => {
           new anchor.BN(86_400),
           6000,
           80,
+          UNCAPPED,
+          UNCAPPED,
         )
         .accountsStrict({
           protocolState: protocolStatePda,
@@ -960,6 +969,8 @@ describe("anemone", () => {
             new anchor.BN(86_400), // 1 day settlement period
             6000, // 60% max utilization
             80,   // 0.8% base spread
+            UNCAPPED,
+            UNCAPPED,
           )
           .accountsStrict({
             protocolState: protocolStatePda,
@@ -1747,6 +1758,8 @@ describe("anemone", () => {
           new anchor.BN(1), // 1 second settlement period
           6000,
           80,
+          UNCAPPED,
+          UNCAPPED,
         )
         .accountsStrict({
           protocolState: protocolStatePda,
@@ -2040,6 +2053,8 @@ describe("anemone", () => {
           new anchor.BN(1),       // 1s settlement period
           6000,
           500,                    // base spread at the H5 cap (5%)
+          UNCAPPED,
+          UNCAPPED,
         )
         .accountsStrict({
           protocolState: protocolStatePda,
@@ -2576,6 +2591,8 @@ describe("anemone", () => {
           new anchor.BN(60),  // 1min settlement
           6000,
           80,                 // normal spread
+          UNCAPPED,
+          UNCAPPED,
         )
         .accountsStrict({
           protocolState: protocolStatePda,
@@ -3429,6 +3446,93 @@ describe("anemone", () => {
       const m2 = await program.account.swapMarket.fetch(marketPda);
       assert.equal(m2.status, 0, "market.status should be 0 (active) after unpause");
       console.log("unpause_market clears the flag ✓");
+    });
+  });
+
+  describe("set_market_caps", () => {
+    it("admin can update caps after market creation", async () => {
+      const newLpNav = new anchor.BN(50_000_000_000); // $50k USDC
+      const newPositionMax = new anchor.BN(5_000_000_000); // $5k
+
+      await program.methods
+        .setMarketCaps(newLpNav, newPositionMax)
+        .accountsStrict({
+          protocolState: protocolStatePda,
+          market: marketPda,
+          authority: authority.publicKey,
+        })
+        .rpc();
+
+      const m = await program.account.swapMarket.fetch(marketPda);
+      assert.equal(
+        m.maxLpNav.toString(),
+        newLpNav.toString(),
+        "max_lp_nav should be updated",
+      );
+      assert.equal(
+        m.maxPositionNotional.toString(),
+        newPositionMax.toString(),
+        "max_position_notional should be updated",
+      );
+      console.log("set_market_caps updates caps ✓");
+    });
+
+    it("rejects non-admin caller", async () => {
+      const stranger = anchor.web3.Keypair.generate();
+      await provider.connection.requestAirdrop(stranger.publicKey, 1_000_000_000);
+      // Wait for airdrop
+      await new Promise((r) => setTimeout(r, 500));
+
+      try {
+        await program.methods
+          .setMarketCaps(UNCAPPED, UNCAPPED)
+          .accountsStrict({
+            protocolState: protocolStatePda,
+            market: marketPda,
+            authority: stranger.publicKey,
+          })
+          .signers([stranger])
+          .rpc();
+        assert.fail("Should have rejected non-admin");
+      } catch (err: any) {
+        assert.match(
+          err.message ?? String(err),
+          /InvalidAuthority/,
+          "should reject with InvalidAuthority",
+        );
+        console.log("set_market_caps rejects non-admin ✓");
+      }
+    });
+
+    it("rejects zero caps as ParamOutOfRange", async () => {
+      try {
+        await program.methods
+          .setMarketCaps(new anchor.BN(0), UNCAPPED)
+          .accountsStrict({
+            protocolState: protocolStatePda,
+            market: marketPda,
+            authority: authority.publicKey,
+          })
+          .rpc();
+        assert.fail("Should have rejected zero max_lp_nav");
+      } catch (err: any) {
+        assert.match(
+          err.message ?? String(err),
+          /ParamOutOfRange/,
+          "should reject with ParamOutOfRange",
+        );
+        console.log("set_market_caps rejects zero caps ✓");
+      }
+
+      // Restore to uncapped so the rest of the suite is unaffected
+      await program.methods
+        .setMarketCaps(UNCAPPED, UNCAPPED)
+        .accountsStrict({
+          protocolState: protocolStatePda,
+          market: marketPda,
+          authority: authority.publicKey,
+        })
+        .rpc();
     });
   });
 });

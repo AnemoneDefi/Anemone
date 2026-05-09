@@ -5,7 +5,8 @@
  * user can see refresh on resubmit.
  *
  * Sources mirrored:
- *   - programs/anemone/src/helpers/spread.rs::calculate_spread_bps
+ *   - programs/anemone/src/helpers/spread.rs::calculate_spread_components
+ *   - programs/anemone/src/helpers/spread.rs::effective_spread_bps
  *   - programs/anemone/src/helpers/spread.rs::calculate_initial_margin
  *   - programs/anemone/src/helpers/settlement.rs::calculate_maintenance_margin
  */
@@ -19,30 +20,42 @@ const SAFETY_FACTOR_X10K = 15_000n; // 1.5x (Rust constant)
 const MM_NUM = 60n;
 const MM_DEN = 100n;
 
+/** Skew sensitivity coefficient — mirrors `SKEW_K_BPS` in spread.rs. */
+const SKEW_K_BPS = 200n;
+
 export interface SpreadBreakdown {
-  /** Total spread in bps. */
+  /**
+   * Effective spread between offered fixed rate and current_apy_bps for the
+   * caller's direction. Always >= base_spread_bps (the LP earnings floor).
+   */
   totalBps: bigint;
   /** Static base spread set at market creation. */
   baseBps: bigint;
   /** Utilization-driven component (scales linearly to baseBps at max util). */
   utilizationBps: bigint;
-  /** Directional imbalance penalty (1bps per 1% imbalance vs lp_nav, capped). */
-  imbalanceBps: bigint;
+  /**
+   * Signed midpoint shift driven by directional imbalance. Positive when
+   * fixed dominates, negative when variable dominates. Applied with the
+   * SAME sign in both directions — it shifts the quoted midpoint, not the
+   * bilateral spread (AMM-style).
+   */
+  skewBps: bigint;
   /** Resulting utilization in bps (informational). */
   utilizationLevelBps: bigint;
 }
 
 /**
- * Mirrors `calculate_spread_bps` (programs/anemone/src/helpers/spread.rs).
- * Returns the total spread plus the breakdown so the UI can show
- * "Base 0.8 + Util 0.27 + Imbal 0.15".
+ * Mirrors `calculate_spread_components` + `effective_spread_bps`
+ * (programs/anemone/src/helpers/spread.rs). Returns the per-direction
+ * effective spread plus the breakdown for the UI.
  */
 export function calculateSpread(
   baseSpreadBps: number,
   maxUtilizationBps: number,
   lpNav: bigint,
   totalFixedNotional: bigint,
-  totalVariableNotional: bigint
+  totalVariableNotional: bigint,
+  direction: SwapDirection
 ): SpreadBreakdown {
   const base = BigInt(baseSpreadBps);
   const maxUtil = BigInt(maxUtilizationBps);
@@ -52,7 +65,7 @@ export function calculateSpread(
       totalBps: base,
       baseBps: base,
       utilizationBps: 0n,
-      imbalanceBps: 0n,
+      skewBps: 0n,
       utilizationLevelBps: 0n,
     };
   }
@@ -62,17 +75,23 @@ export function calculateSpread(
   const cappedUtil = utilizationLevelBps > maxUtil ? maxUtil : utilizationLevelBps;
   const utilizationBps = maxUtil === 0n ? 0n : (base * cappedUtil) / maxUtil;
 
-  const imbalance =
-    totalFixedNotional >= totalVariableNotional
-      ? totalFixedNotional - totalVariableNotional
-      : totalVariableNotional - totalFixedNotional;
-  const imbalanceBps = (imbalance * 100n) / lpNav;
+  // Signed imbalance (positive when fixed dominates).
+  const imbalance = totalFixedNotional - totalVariableNotional;
+  const skewBps = (imbalance * SKEW_K_BPS) / lpNav;
+
+  const basePlusUtil = base + utilizationBps;
+  // Direction-aware effective spread; clamp at base_spread_bps as LP floor.
+  const raw =
+    direction === SwapDirection.PayFixed
+      ? basePlusUtil + skewBps
+      : basePlusUtil - skewBps;
+  const totalBps = raw < base ? base : raw;
 
   return {
-    totalBps: base + utilizationBps + imbalanceBps,
+    totalBps,
     baseBps: base,
     utilizationBps,
-    imbalanceBps,
+    skewBps,
     utilizationLevelBps,
   };
 }
@@ -98,7 +117,14 @@ export function calculateSpreadWithNewSwap(
     direction === SwapDirection.ReceiveFixed
       ? totalVariableNotional + newNotional
       : totalVariableNotional;
-  return calculateSpread(baseSpreadBps, maxUtilizationBps, lpNav, fixed, variable);
+  return calculateSpread(
+    baseSpreadBps,
+    maxUtilizationBps,
+    lpNav,
+    fixed,
+    variable,
+    direction
+  );
 }
 
 /** Mirrors `calculate_initial_margin` — collateral the program will lock. */

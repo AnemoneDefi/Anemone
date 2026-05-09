@@ -26,7 +26,11 @@ import {
   useTraderPositions,
 } from "@/lib/hooks";
 import { buildClient } from "@/lib/anemone";
-import { resolveKaminoCpiAccounts } from "@/lib/kamino";
+import {
+  resolveKaminoCpiAccounts,
+  IS_KAMINO_STUB,
+  KAMINO_PROGRAM_ID,
+} from "@/lib/kamino";
 import {
   calculateMaintenanceMargin,
   calculateUnrealizedPnl,
@@ -984,10 +988,22 @@ export default function PortfolioPage() {
 
     try {
       const client = buildClient(anchorWallet);
-      const kamino = await resolveKaminoCpiAccounts(
-        connection,
-        new PublicKey(market.underlyingReserve)
-      );
+      // Devnet/localnet: program is built with stub-oracle, so kamino_reserve
+      // is UncheckedAccount and the program never dereferences these accounts.
+      // Resolving against RPC fails (the fake reserve isn't real Kamino state),
+      // so we pass placeholder pubkeys that satisfy the Anchor account types
+      // without requiring on-chain Kamino data.
+      const kamino = IS_KAMINO_STUB
+        ? {
+            kaminoLendingMarket: KAMINO_PROGRAM_ID,
+            kaminoLendingMarketAuthority: KAMINO_PROGRAM_ID,
+            reserveLiquiditySupply: KAMINO_PROGRAM_ID,
+            reserveCollateralMint: KAMINO_PROGRAM_ID,
+          }
+        : await resolveKaminoCpiAccounts(
+            connection,
+            new PublicKey(market.underlyingReserve)
+          );
 
       let signature: string;
       if (action === "closeEarly") {

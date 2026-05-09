@@ -271,7 +271,14 @@ async function main() {
     console.log(`  market already exists`);
   } else {
     const tx = await program.methods
-      .createMarket(TENOR_SECONDS, SETTLEMENT_PERIOD_SECONDS, MAX_UTILIZATION_BPS, BASE_SPREAD_BPS)
+      .createMarket(
+        TENOR_SECONDS,
+        SETTLEMENT_PERIOD_SECONDS,
+        MAX_UTILIZATION_BPS,
+        BASE_SPREAD_BPS,
+        new anchor.BN("18446744073709551615"), // u64::MAX, devnet uncapped
+        new anchor.BN("18446744073709551615"),
+      )
       .accountsStrict({
         protocolState: protocolStatePda,
         market: marketPda,
@@ -281,7 +288,12 @@ async function main() {
         kaminoDepositAccount: kaminoDepositPda,
         kaminoCollateralMint: fakeKaminoCollateralMint.publicKey,
         underlyingReserve: fakeReserve.publicKey,
-        underlyingProtocol: fakeUnderlyingProtocol.publicKey,
+        // Use the real Kamino program ID so SDK use-cases (which hard-code
+        // KAMINO_PROGRAM_ID for the kamino_program account) pass the
+        // `kamino_program.key() == market.underlying_protocol` constraint
+        // without needing per-cluster overrides. In stub-oracle builds the
+        // program never CPIs Kamino, so this pubkey is purely identity.
+        underlyingProtocol: new PublicKey("KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD"),
         underlyingMint: usdcMint,
         authority: deployer.publicKey,
         systemProgram: SystemProgram.programId,
@@ -340,6 +352,7 @@ async function main() {
         depositorLpTokenAccount: deployerLpAta,
         depositor: deployer.publicKey,
         tokenProgram: TOKEN_PROGRAM_ID,
+        associatedTokenProgram: new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"),
         systemProgram: SystemProgram.programId,
       })
       .rpc();
@@ -395,7 +408,7 @@ async function main() {
     kaminoDepositAccount: kaminoDepositPda.toBase58(),
     fakeKaminoCollateralMint: fakeKaminoCollateralMint.publicKey.toBase58(),
     fakeUnderlyingReserve: fakeReserve.publicKey.toBase58(),
-    fakeUnderlyingProtocol: fakeUnderlyingProtocol.publicKey.toBase58(),
+    fakeUnderlyingProtocol: "KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD",
     treasury: treasuryTokenAccount.toBase58(),
     keeper: keeper.publicKey.toBase58(),
     deployer: deployer.publicKey.toBase58(),

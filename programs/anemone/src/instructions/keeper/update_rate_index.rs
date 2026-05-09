@@ -131,6 +131,7 @@ pub fn handle_update_rate_index(ctx: Context<UpdateRateIndex>) -> Result<()> {
     market.last_rate_update_ts = now;
 
     msg!("Rate index updated: {}", rate_index);
+    msg!("Market: {}", market.key());
 
     Ok(())
 }

@@ -28,6 +28,35 @@ const REFRESH_RESERVE_DISCRIMINATOR = Buffer.from([
   2, 218, 138, 235, 79, 201, 25, 102,
 ]);
 
+/** Anchor discriminator for Anemone's `sync_kamino_yield` instruction
+ *  (sha256("global:sync_kamino_yield")[..8]). Same in stub and mainnet builds. */
+const SYNC_KAMINO_YIELD_DISCRIMINATOR = Buffer.from([
+  128, 113, 51, 252, 183, 226, 166, 35,
+]);
+
+/**
+ * Devnet/localnet sync_kamino_yield: the program is built with the
+ * `stub-oracle` feature, which compiles `SyncKaminoYield` to take ONLY the
+ * market account (no Kamino CPI). The SDK's IDL is mainnet-shaped (10 accounts)
+ * so `program.methods.syncKaminoYield()` cannot be used — Anchor would reject
+ * the missing accounts. Build the raw instruction instead.
+ */
+export function buildSyncKaminoYieldStubIx(
+  anemoneProgramId: PublicKey,
+  market: PublicKey,
+): TransactionInstruction {
+  return new TransactionInstruction({
+    programId: anemoneProgramId,
+    keys: [{ pubkey: market, isSigner: false, isWritable: true }],
+    data: SYNC_KAMINO_YIELD_DISCRIMINATOR,
+  });
+}
+
+/** True when the frontend is configured for a cluster without Kamino deployed. */
+export const IS_KAMINO_STUB =
+  (process.env.NEXT_PUBLIC_NETWORK ?? "").toLowerCase() === "devnet" ||
+  (process.env.NEXT_PUBLIC_NETWORK ?? "").toLowerCase() === "localnet";
+
 /**
  * Build a Kamino `refresh_reserve` instruction. Bundle as preInstruction to any
  * Anemone op that reads `cumulative_borrow_rate_bsf` so the reserve state is

@@ -16,6 +16,7 @@ import { Nav } from "@/components/Nav";
 import { Footer } from "@/components/Footer";
 import { RevealOnScroll } from "@/components/RevealOnScroll";
 import { useMarkets, useMarket, useProtocol } from "@/lib/hooks";
+import { useMarketStats, rateHistoryToApyPoints } from "@/lib/analytics";
 import { useTokenBalance } from "@/lib/balance";
 import { buildClient } from "@/lib/anemone";
 import {
@@ -134,7 +135,8 @@ function deriveMarket(
           market.maxUtilizationBps,
           market.lpNav,
           market.totalFixedNotional,
-          market.totalVariableNotional
+          market.totalVariableNotional,
+          direction
         );
 
   const fixedOfferedBps =
@@ -227,9 +229,9 @@ function MarketStrip({ market }: { market: Market | null | undefined }) {
   );
 }
 
-// ─── LeftColumn (KPI grid wired, chart kept mocked) ────────────────────────
+// ─── LeftColumn (KPI grid wired, chart wired to analytics API w/ mock fallback) ─
 
-const SERIES = [
+const MOCK_SERIES = [
   6.2, 6.4, 6.1, 5.9, 6.3, 6.7, 7.1, 6.9, 6.6, 6.4,
   6.8, 7.2, 7.5, 7.3, 7.0, 6.8, 7.1, 7.4, 7.8, 8.1,
   8.4, 8.2, 7.9, 7.7, 8.0, 8.3, 8.6, 8.9, 9.2, 9.0,
@@ -238,13 +240,18 @@ const SERIES = [
   9.0, 9.1, 9.2, 9.3, 9.4, 9.3, 9.2, 9.3, 9.4, 9.42,
 ];
 
-function RateChart() {
+function RateChart({ series }: { series: number[] }) {
   const W = 800, H = 360, PADL = 8, PADR = 48, PADT = 16, PADB = 30;
-  const data = useMemo(() => SERIES.map((y, i) => ({ x: i, y })), []);
+  const data = useMemo(() => series.map((y, i) => ({ x: i, y })), [series]);
   const xMin = 0;
-  const xMax = data.length - 1;
-  const yMin = 2;
-  const yMax = 14;
+  const xMax = Math.max(1, data.length - 1);
+  // Auto-scale Y to data range with padding so live data isn't squished.
+  const yValues = data.map((d) => d.y);
+  const yLo = yValues.length ? Math.min(...yValues) : 2;
+  const yHi = yValues.length ? Math.max(...yValues) : 14;
+  const ySpan = Math.max(yHi - yLo, 1);
+  const yMin = Math.max(0, Math.floor(yLo - ySpan * 0.2));
+  const yMax = Math.ceil(yHi + ySpan * 0.2);
   const xScale = (x: number) =>
     PADL + ((x - xMin) / (xMax - xMin)) * (W - PADL - PADR);
   const yScale = (y: number) =>
@@ -253,9 +260,21 @@ function RateChart() {
     .map((p, i) => `${i === 0 ? "M" : "L"}${xScale(p.x).toFixed(2)},${yScale(p.y).toFixed(2)}`)
     .join(" ");
   const areaPath = `${linePath} L${xScale(xMax).toFixed(2)},${yScale(yMin).toFixed(2)} L${xScale(xMin).toFixed(2)},${yScale(yMin).toFixed(2)} Z`;
-  const yTicks = [2, 6, 10, 14];
-  const xTickIdx = [0, 15, 29, 44, 59];
-  const xTickLabels = ["−60D", "−45D", "−30D", "−15D", "TODAY"];
+  const yTicks = (() => {
+    const span = yMax - yMin;
+    const step = span / 3;
+    return [yMin, yMin + step, yMin + 2 * step, yMax].map((v) => Math.round(v * 10) / 10);
+  })();
+  const xTickIdx = (() => {
+    if (data.length <= 1) return [0];
+    const last = data.length - 1;
+    return [0, Math.round(last * 0.25), Math.round(last * 0.5), Math.round(last * 0.75), last];
+  })();
+  const xTickLabels = (() => {
+    const n = data.length;
+    if (n <= 1) return ["NOW"];
+    return ["", "", "", "", "NOW"];
+  })();
   return (
     <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ display: "block" }}>
       <defs>
@@ -290,12 +309,19 @@ function LeftColumn({
   market: Market | null | undefined;
   derived: MarketDerived | null;
 }) {
+  const { data: marketStats } = useMarketStats(market?.publicKey);
+  const liveSeries = useMemo(
+    () => rateHistoryToApyPoints(marketStats?.rate_history).map((p) => p.apyPct),
+    [marketStats?.rate_history]
+  );
+  const series = liveSeries.length >= 2 ? liveSeries : MOCK_SERIES;
+  const isLive = liveSeries.length >= 2;
   return (
     <div className={`${s.card} ${s.chartCard} reveal`}>
       <div className={s.chartHead}>
         <div className={s.chartTitle}>
           {market
-            ? `KAMINO USDC · ${Number(market.tenorSeconds) / 86_400}-DAY RATE (60d historical mock — partner refresh)`
+            ? `KAMINO USDC · ${Number(market.tenorSeconds) / 86_400}-DAY RATE${isLive ? "" : " (historical preview — indexer warming up)"}`
             : "KAMINO USDC RATE"}
         </div>
         <div className={s.tfRow}>
@@ -326,7 +352,7 @@ function LeftColumn({
         </div>
       </div>
 
-      <RateChart />
+      <RateChart series={series} />
 
       <div className={s.kpiGrid}>
         <div className={s.kpiTile}>
@@ -354,7 +380,7 @@ function LeftColumn({
             {derived
               ? `Base ${formatBps(derived.spread.baseBps)} + Util ${formatBps(
                   derived.spread.utilizationBps
-                )} + Imbal ${formatBps(derived.spread.imbalanceBps)}`
+                )} + Skew ${formatBps(derived.spread.skewBps)}`
               : "—"}
           </span>
         </div>
@@ -417,7 +443,8 @@ function ImpactStrip({
     market.maxUtilizationBps,
     market.lpNav,
     market.totalFixedNotional,
-    market.totalVariableNotional
+    market.totalVariableNotional,
+    direction
   );
   const utilBefore = utilizationPct(
     market.totalFixedNotional + market.totalVariableNotional,

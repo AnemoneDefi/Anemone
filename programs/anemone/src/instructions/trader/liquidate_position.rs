@@ -3,9 +3,12 @@ use anchor_spl::token_interface::{
     Mint, TokenAccount, TokenInterface,
     transfer_checked, TransferChecked,
 };
+#[cfg(not(feature = "stub-oracle"))]
 use kamino_lend::state::Reserve;
 use crate::state::{SwapMarket, SwapPosition, SwapDirection, PositionStatus, ProtocolState};
-use crate::helpers::{calculate_maintenance_margin, calculate_period_pnl, cpi_withdraw_from_kamino, read_kamino_liquidity_to_collateral};
+use crate::helpers::{calculate_maintenance_margin, calculate_period_pnl};
+#[cfg(not(feature = "stub-oracle"))]
+use crate::helpers::{cpi_withdraw_from_kamino, read_kamino_liquidity_to_collateral};
 use crate::errors::AnemoneError;
 
 #[derive(Accounts)]
@@ -112,12 +115,21 @@ pub struct LiquidatePosition<'info> {
     /// Kamino reserve — typed as AccountLoader so the handler can read the
     /// live exchange rate to convert USDC shortfall into k-USDC collateral
     /// before invoking `redeem_reserve_collateral` (Finding 10 fix).
+    #[cfg(not(feature = "stub-oracle"))]
     #[account(
         mut,
         constraint = kamino_reserve.key() == market.underlying_reserve
             @ AnemoneError::InvalidReserve,
     )]
     pub kamino_reserve: AccountLoader<'info, Reserve>,
+    /// CHECK: stub-oracle build skips Kamino — account is pubkey-verified only.
+    #[cfg(feature = "stub-oracle")]
+    #[account(
+        mut,
+        constraint = kamino_reserve.key() == market.underlying_reserve
+            @ AnemoneError::InvalidReserve,
+    )]
+    pub kamino_reserve: UncheckedAccount<'info>,
 
     /// CHECK: Validated by Kamino program during CPI
     pub kamino_lending_market: AccountInfo<'info>,
@@ -205,43 +217,55 @@ pub fn handle_liquidate_position(ctx: Context<LiquidatePosition>) -> Result<()> 
     // (was passing USDC as collateral_amount). Cap at actual k-USDC held;
     // if cap binds, the transfer below moves what we have and the residual
     // becomes unpaid_pnl, deferring full liquidation pay-out until rebalance.
+    // total_lp_drain and kamino_redeemed_usdc are only consumed in the
+    // non-stub redeem branch below. In stub-oracle builds they're computed
+    // but never read; allow both warnings rather than gating each line.
+    #[allow(unused_variables, unused_mut)]
     let total_lp_drain: u64 = (position.unpaid_pnl.max(0) as u64)
         .checked_add(pnl.max(0) as u64)
         .ok_or(AnemoneError::MathOverflow)?;
     let lp_vault_balance = ctx.accounts.lp_vault.amount;
+    #[allow(unused_mut)]
     let mut kamino_redeemed_usdc: u64 = 0;
-    if total_lp_drain > lp_vault_balance {
-        let shortfall_usdc = total_lp_drain - lp_vault_balance;
-        let computed_k = read_kamino_liquidity_to_collateral(
-            &ctx.accounts.kamino_reserve,
-            shortfall_usdc,
-        )?;
-        let max_held_k = ctx.accounts.kamino_deposit_account.amount;
-        let actual_redeem_k = computed_k.min(max_held_k);
-
-        if actual_redeem_k > 0 {
-            let lp_vault_before_cpi = ctx.accounts.lp_vault.amount;
-            cpi_withdraw_from_kamino(
-                &ctx.accounts.kamino_program,
-                &ctx.accounts.market.to_account_info(),
-                signer_seeds,
-                &ctx.accounts.kamino_reserve.to_account_info(),
-                &ctx.accounts.kamino_lending_market,
-                &ctx.accounts.kamino_lending_market_authority,
-                &ctx.accounts.reserve_liquidity_mint.to_account_info(),
-                &ctx.accounts.reserve_liquidity_supply,
-                &ctx.accounts.reserve_collateral_mint,
-                &ctx.accounts.kamino_deposit_account.to_account_info(),
-                &ctx.accounts.lp_vault.to_account_info(),
-                &ctx.accounts.collateral_token_program.to_account_info(),
-                &ctx.accounts.liquidity_token_program.to_account_info(),
-                &ctx.accounts.instruction_sysvar_account,
-                actual_redeem_k,
+    let _ = lp_vault_balance; // referenced only in non-stub branch below
+    // Stub-oracle builds skip the Kamino redeem. Shortfall remains as
+    // unpaid_pnl after liquidation; keeper rebalance refills lp_vault later
+    // (manual on devnet). Mainnet path below redeems just enough k-USDC.
+    #[cfg(not(feature = "stub-oracle"))]
+    {
+        if total_lp_drain > lp_vault_balance {
+            let shortfall_usdc = total_lp_drain - lp_vault_balance;
+            let computed_k = read_kamino_liquidity_to_collateral(
+                &ctx.accounts.kamino_reserve,
+                shortfall_usdc,
             )?;
-            ctx.accounts.lp_vault.reload()?;
-            ctx.accounts.kamino_deposit_account.reload()?;
-            kamino_redeemed_usdc = ctx.accounts.lp_vault.amount
-                .saturating_sub(lp_vault_before_cpi);
+            let max_held_k = ctx.accounts.kamino_deposit_account.amount;
+            let actual_redeem_k = computed_k.min(max_held_k);
+
+            if actual_redeem_k > 0 {
+                let lp_vault_before_cpi = ctx.accounts.lp_vault.amount;
+                cpi_withdraw_from_kamino(
+                    &ctx.accounts.kamino_program,
+                    &ctx.accounts.market.to_account_info(),
+                    signer_seeds,
+                    &ctx.accounts.kamino_reserve.to_account_info(),
+                    &ctx.accounts.kamino_lending_market,
+                    &ctx.accounts.kamino_lending_market_authority,
+                    &ctx.accounts.reserve_liquidity_mint.to_account_info(),
+                    &ctx.accounts.reserve_liquidity_supply,
+                    &ctx.accounts.reserve_collateral_mint,
+                    &ctx.accounts.kamino_deposit_account.to_account_info(),
+                    &ctx.accounts.lp_vault.to_account_info(),
+                    &ctx.accounts.collateral_token_program.to_account_info(),
+                    &ctx.accounts.liquidity_token_program.to_account_info(),
+                    &ctx.accounts.instruction_sysvar_account,
+                    actual_redeem_k,
+                )?;
+                ctx.accounts.lp_vault.reload()?;
+                ctx.accounts.kamino_deposit_account.reload()?;
+                kamino_redeemed_usdc = ctx.accounts.lp_vault.amount
+                    .saturating_sub(lp_vault_before_cpi);
+            }
         }
     }
 

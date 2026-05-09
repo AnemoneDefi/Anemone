@@ -3,8 +3,10 @@ use anchor_spl::token_interface::{
     Mint, TokenAccount, TokenInterface,
     burn, transfer_checked, Burn, TransferChecked,
 };
+#[cfg(not(feature = "stub-oracle"))]
 use kamino_lend::state::Reserve;
 use crate::state::{SwapMarket, LpPosition, LpStatus, ProtocolState, MAX_NAV_STALENESS_SECS};
+#[cfg(not(feature = "stub-oracle"))]
 use crate::helpers::{cpi_withdraw_from_kamino, read_kamino_liquidity_to_collateral};
 use crate::errors::AnemoneError;
 
@@ -118,12 +120,21 @@ pub struct RequestWithdrawal<'info> {
     /// convert the requested USDC shortfall into a k-USDC collateral amount
     /// before invoking `redeem_reserve_collateral`. The CPI also writes back
     /// to the reserve, hence `mut`.
+    #[cfg(not(feature = "stub-oracle"))]
     #[account(
         mut,
         constraint = kamino_reserve.key() == market.underlying_reserve
             @ AnemoneError::InvalidReserve,
     )]
     pub kamino_reserve: AccountLoader<'info, Reserve>,
+    /// CHECK: stub-oracle build skips Kamino — account is pubkey-verified only.
+    #[cfg(feature = "stub-oracle")]
+    #[account(
+        mut,
+        constraint = kamino_reserve.key() == market.underlying_reserve
+            @ AnemoneError::InvalidReserve,
+    )]
+    pub kamino_reserve: UncheckedAccount<'info>,
 
     /// CHECK: Validated by Kamino program during CPI
     pub kamino_lending_market: AccountInfo<'info>,
@@ -220,39 +231,49 @@ pub fn handle_request_withdrawal(
     //      we burn shares and decrement state proportionally so the unpaid
     //      portion remains backed by the LP's residual shares (they can
     //      withdraw it later once a keeper rebalance refills the pool).
+    // `mut` is unused in stub-oracle builds where the redemption path below
+    // is compiled out. Allow the warning here so both feature configurations
+    // build clean.
+    #[allow(unused_mut)]
     let mut kamino_redeemed_usdc: u64 = 0;
-    if requested_gross > ctx.accounts.lp_vault.amount {
-        let shortfall_usdc = requested_gross - ctx.accounts.lp_vault.amount;
-        let computed_k = read_kamino_liquidity_to_collateral(
-            &ctx.accounts.kamino_reserve,
-            shortfall_usdc,
-        )?;
-        let max_held_k = ctx.accounts.kamino_deposit_account.amount;
-        let actual_redeem_k = computed_k.min(max_held_k);
-
-        if actual_redeem_k > 0 {
-            let lp_vault_before_cpi = ctx.accounts.lp_vault.amount;
-            cpi_withdraw_from_kamino(
-                &ctx.accounts.kamino_program,
-                &ctx.accounts.market.to_account_info(),
-                signer_seeds,
-                &ctx.accounts.kamino_reserve.to_account_info(),
-                &ctx.accounts.kamino_lending_market,
-                &ctx.accounts.kamino_lending_market_authority,
-                &ctx.accounts.reserve_liquidity_mint.to_account_info(),
-                &ctx.accounts.reserve_liquidity_supply,
-                &ctx.accounts.reserve_collateral_mint,
-                &ctx.accounts.kamino_deposit_account.to_account_info(),
-                &ctx.accounts.lp_vault.to_account_info(),
-                &ctx.accounts.collateral_token_program.to_account_info(),
-                &ctx.accounts.liquidity_token_program.to_account_info(),
-                &ctx.accounts.instruction_sysvar_account,
-                actual_redeem_k,
+    // In stub-oracle builds (devnet/localnet) Kamino is not deployed, so
+    // there are no k-tokens to redeem. lp_vault holds 100% of LP capital;
+    // shortfall just becomes a partial burn via compute_partial_burn below.
+    #[cfg(not(feature = "stub-oracle"))]
+    {
+        if requested_gross > ctx.accounts.lp_vault.amount {
+            let shortfall_usdc = requested_gross - ctx.accounts.lp_vault.amount;
+            let computed_k = read_kamino_liquidity_to_collateral(
+                &ctx.accounts.kamino_reserve,
+                shortfall_usdc,
             )?;
-            ctx.accounts.lp_vault.reload()?;
-            ctx.accounts.kamino_deposit_account.reload()?;
-            kamino_redeemed_usdc = ctx.accounts.lp_vault.amount
-                .saturating_sub(lp_vault_before_cpi);
+            let max_held_k = ctx.accounts.kamino_deposit_account.amount;
+            let actual_redeem_k = computed_k.min(max_held_k);
+
+            if actual_redeem_k > 0 {
+                let lp_vault_before_cpi = ctx.accounts.lp_vault.amount;
+                cpi_withdraw_from_kamino(
+                    &ctx.accounts.kamino_program,
+                    &ctx.accounts.market.to_account_info(),
+                    signer_seeds,
+                    &ctx.accounts.kamino_reserve.to_account_info(),
+                    &ctx.accounts.kamino_lending_market,
+                    &ctx.accounts.kamino_lending_market_authority,
+                    &ctx.accounts.reserve_liquidity_mint.to_account_info(),
+                    &ctx.accounts.reserve_liquidity_supply,
+                    &ctx.accounts.reserve_collateral_mint,
+                    &ctx.accounts.kamino_deposit_account.to_account_info(),
+                    &ctx.accounts.lp_vault.to_account_info(),
+                    &ctx.accounts.collateral_token_program.to_account_info(),
+                    &ctx.accounts.liquidity_token_program.to_account_info(),
+                    &ctx.accounts.instruction_sysvar_account,
+                    actual_redeem_k,
+                )?;
+                ctx.accounts.lp_vault.reload()?;
+                ctx.accounts.kamino_deposit_account.reload()?;
+                kamino_redeemed_usdc = ctx.accounts.lp_vault.amount
+                    .saturating_sub(lp_vault_before_cpi);
+            }
         }
     }
 
@@ -358,6 +379,7 @@ pub fn handle_request_withdrawal(
         actual_shares_burned, net_amount, fee, kamino_redeemed_usdc,
         actual_gross < requested_gross,
     );
+    msg!("Market: {}", market.key());
 
     Ok(())
 }

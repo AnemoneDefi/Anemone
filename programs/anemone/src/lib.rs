@@ -37,6 +37,8 @@ pub mod anemone {
         settlement_period_seconds: i64,
         max_utilization_bps: u16,
         base_spread_bps: u16,
+        max_lp_nav: u64,
+        max_position_notional: u64,
     ) -> Result<()> {
         instructions::admin::create_market::handle_create_market(
             ctx,
@@ -44,11 +46,29 @@ pub mod anemone {
             settlement_period_seconds,
             max_utilization_bps,
             base_spread_bps,
+            max_lp_nav,
+            max_position_notional,
         )
     }
 
     pub fn set_keeper(ctx: Context<SetKeeper>, new_keeper: Pubkey) -> Result<()> {
         instructions::admin::set_keeper::handle_set_keeper(ctx, new_keeper)
+    }
+
+    pub fn update_treasury(ctx: Context<UpdateTreasury>) -> Result<()> {
+        instructions::admin::update_treasury::handle_update_treasury(ctx)
+    }
+
+    pub fn set_market_caps(
+        ctx: Context<SetMarketCaps>,
+        max_lp_nav: u64,
+        max_position_notional: u64,
+    ) -> Result<()> {
+        instructions::admin::set_market_caps::handle_set_market_caps(
+            ctx,
+            max_lp_nav,
+            max_position_notional,
+        )
     }
 
     pub fn pause_protocol(ctx: Context<PauseProtocol>) -> Result<()> {

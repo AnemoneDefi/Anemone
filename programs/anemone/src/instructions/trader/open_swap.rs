@@ -4,7 +4,10 @@ use anchor_spl::token_interface::{
     transfer_checked, TransferChecked,
 };
 use crate::state::{SwapMarket, SwapPosition, SwapDirection, PositionStatus, ProtocolState};
-use crate::helpers::{calculate_spread_bps, calculate_initial_margin, calculate_current_apy_from_index};
+use crate::helpers::{
+    calculate_spread_components, effective_spread_bps,
+    calculate_initial_margin, calculate_current_apy_from_index,
+};
 use crate::errors::AnemoneError;
 
 /// Maximum age of `market.last_rate_update_ts` that `open_swap` will price
@@ -106,6 +109,12 @@ pub fn handle_open_swap(
 
     require!(!protocol_state.paused, AnemoneError::ProtocolPaused);
 
+    // v0.1 mainnet per-position cap. `max_position_notional == u64::MAX` disables it.
+    require!(
+        notional <= market.max_position_notional,
+        AnemoneError::PositionCapExceeded,
+    );
+
     // 1. Validate rate index has been initialized by keeper
     require!(
         market.current_rate_index > 0 && market.previous_rate_index > 0,
@@ -154,12 +163,25 @@ pub fn handle_open_swap(
         ),
     };
 
-    let spread_bps = calculate_spread_bps(
+    // AMM-style skew-shift pricing. `base_plus_util_bps` is the symmetric
+    // component (LP earnings floor); `skew_bps` shifts the midpoint based on
+    // directional imbalance so the dominant side pays more and the
+    // rebalancing side gets a relative discount. The clamp inside
+    // `effective_spread_bps` guarantees LP always earns >= base_spread_bps
+    // per trade regardless of skew magnitude.
+    let (base_plus_util_bps, skew_bps) = calculate_spread_components(
         market.base_spread_bps,
         market.max_utilization_bps,
         market.lp_nav,
         fixed_with_new,
         variable_with_new,
+    )?;
+
+    let spread_bps = effective_spread_bps(
+        base_plus_util_bps,
+        skew_bps,
+        direction,
+        market.base_spread_bps,
     )?;
 
     // 4. Calculate offered fixed rate

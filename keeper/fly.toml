@@ -1,0 +1,46 @@
+# Fly.io config for the Anemone keeper. Deploy with `fly launch --no-deploy`
+# the first time (to set the app name + region), then `fly deploy`.
+#
+# Required secrets (set via `fly secrets set NAME=value`):
+#   - KEEPER_KEYPAIR_JSON  — keeper wallet secret as `[1,2,3,...]` JSON array
+#   - ADMIN_KEYPAIR_JSON   — admin wallet (only in stub-oracle / devnet mode)
+#
+# Other env vars travel as plain config below; rotate without redeploy via
+# `fly config save` + `fly deploy`.
+
+app = "anemone-keeper"
+primary_region = "gru"  # Sao Paulo — close to us; pick whatever fits
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  RPC_URL = "https://api.devnet.solana.com"
+  PROGRAM_ID = "KQs6ci5FtedFKPVJThAZSMMXyosK4TvnF7kcDSx5Jwd"
+  MARKET_PDA = "3g6cfKzfDDRMZVLaLMjCYWMuw3itUBnHgLPZpDWNABin"
+  KAMINO_RESERVE = "D6q6wuQSrifJKZYpR1M8R4YawnLDtDsMmWM1NbBmgJ59"
+  USE_STUB_ORACLE = "true"
+  STUB_RATE_INCREMENT = "1000000000000"
+  BRIDGE_MAINNET_RPC_URL = "https://api.mainnet-beta.solana.com"
+  PRIORITY_FEE_MICROLAMPORTS = "10000"
+  LOG_LEVEL = "info"
+  PORT = "8080"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false   # keeper must stay up; cron drives the work
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "30s"
+    method = "GET"
+    path = "/health"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 256

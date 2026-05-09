@@ -3,9 +3,11 @@ use anchor_spl::token_interface::{
     Mint, TokenAccount, TokenInterface,
     transfer_checked, TransferChecked,
 };
+#[cfg(not(feature = "stub-oracle"))]
 use kamino_lend::state::Reserve;
 use crate::state::{SwapMarket, SwapPosition, SwapDirection, PositionStatus};
 use crate::errors::AnemoneError;
+#[cfg(not(feature = "stub-oracle"))]
 use crate::helpers::{cpi_withdraw_from_kamino, read_kamino_liquidity_to_collateral};
 
 #[derive(Accounts)]
@@ -82,12 +84,21 @@ pub struct ClaimMatured<'info> {
     /// rate fields needed to convert the USDC shortfall into a k-USDC
     /// collateral amount before invoking `redeem_reserve_collateral`
     /// (Finding 10 fix). The CPI also writes to it, hence `mut`.
+    #[cfg(not(feature = "stub-oracle"))]
     #[account(
         mut,
         constraint = kamino_reserve.key() == market.underlying_reserve
             @ AnemoneError::InvalidReserve,
     )]
     pub kamino_reserve: AccountLoader<'info, Reserve>,
+    /// CHECK: stub-oracle build skips Kamino — account is pubkey-verified only.
+    #[cfg(feature = "stub-oracle")]
+    #[account(
+        mut,
+        constraint = kamino_reserve.key() == market.underlying_reserve
+            @ AnemoneError::InvalidReserve,
+    )]
+    pub kamino_reserve: UncheckedAccount<'info>,
 
     /// CHECK: Validated by Kamino program during CPI
     pub kamino_lending_market: AccountInfo<'info>,
@@ -150,42 +161,52 @@ pub fn handle_claim_matured(ctx: Context<ClaimMatured>) -> Result<()> {
     // binds, the catchup below transfers what we have and any remainder
     // becomes unpaid_pnl, deferring the trader's claim until a keeper
     // refills the pool.
+    // `mut` is unused in stub-oracle builds where the redeem path below is
+    // compiled out. Allow the warning here so both feature configurations
+    // build clean.
+    #[allow(unused_mut)]
     let mut kamino_redeemed_usdc: u64 = 0;
-    if position.unpaid_pnl > 0 {
-        let needed = position.unpaid_pnl as u64;
-        let lp_vault_balance = ctx.accounts.lp_vault.amount;
-        if needed > lp_vault_balance {
-            let shortfall_usdc = needed - lp_vault_balance;
-            let computed_k = read_kamino_liquidity_to_collateral(
-                &ctx.accounts.kamino_reserve,
-                shortfall_usdc,
-            )?;
-            let max_held_k = ctx.accounts.kamino_deposit_account.amount;
-            let actual_redeem_k = computed_k.min(max_held_k);
-
-            if actual_redeem_k > 0 {
-                let lp_vault_before_cpi = ctx.accounts.lp_vault.amount;
-                cpi_withdraw_from_kamino(
-                    &ctx.accounts.kamino_program,
-                    &ctx.accounts.market.to_account_info(),
-                    signer_seeds,
-                    &ctx.accounts.kamino_reserve.to_account_info(),
-                    &ctx.accounts.kamino_lending_market,
-                    &ctx.accounts.kamino_lending_market_authority,
-                    &ctx.accounts.reserve_liquidity_mint.to_account_info(),
-                    &ctx.accounts.reserve_liquidity_supply,
-                    &ctx.accounts.reserve_collateral_mint,
-                    &ctx.accounts.kamino_deposit_account.to_account_info(),
-                    &ctx.accounts.lp_vault.to_account_info(),
-                    &ctx.accounts.collateral_token_program.to_account_info(),
-                    &ctx.accounts.liquidity_token_program.to_account_info(),
-                    &ctx.accounts.instruction_sysvar_account,
-                    actual_redeem_k,
+    // Stub-oracle builds (devnet/localnet) skip the Kamino redeem — lp_vault
+    // is the only LP capital pool. Shortfall remains as unpaid_pnl per the
+    // catchup path below, deferring the trader's claim until a keeper rebalance.
+    #[cfg(not(feature = "stub-oracle"))]
+    {
+        if position.unpaid_pnl > 0 {
+            let needed = position.unpaid_pnl as u64;
+            let lp_vault_balance = ctx.accounts.lp_vault.amount;
+            if needed > lp_vault_balance {
+                let shortfall_usdc = needed - lp_vault_balance;
+                let computed_k = read_kamino_liquidity_to_collateral(
+                    &ctx.accounts.kamino_reserve,
+                    shortfall_usdc,
                 )?;
-                ctx.accounts.lp_vault.reload()?;
-                ctx.accounts.kamino_deposit_account.reload()?;
-                kamino_redeemed_usdc = ctx.accounts.lp_vault.amount
-                    .saturating_sub(lp_vault_before_cpi);
+                let max_held_k = ctx.accounts.kamino_deposit_account.amount;
+                let actual_redeem_k = computed_k.min(max_held_k);
+
+                if actual_redeem_k > 0 {
+                    let lp_vault_before_cpi = ctx.accounts.lp_vault.amount;
+                    cpi_withdraw_from_kamino(
+                        &ctx.accounts.kamino_program,
+                        &ctx.accounts.market.to_account_info(),
+                        signer_seeds,
+                        &ctx.accounts.kamino_reserve.to_account_info(),
+                        &ctx.accounts.kamino_lending_market,
+                        &ctx.accounts.kamino_lending_market_authority,
+                        &ctx.accounts.reserve_liquidity_mint.to_account_info(),
+                        &ctx.accounts.reserve_liquidity_supply,
+                        &ctx.accounts.reserve_collateral_mint,
+                        &ctx.accounts.kamino_deposit_account.to_account_info(),
+                        &ctx.accounts.lp_vault.to_account_info(),
+                        &ctx.accounts.collateral_token_program.to_account_info(),
+                        &ctx.accounts.liquidity_token_program.to_account_info(),
+                        &ctx.accounts.instruction_sysvar_account,
+                        actual_redeem_k,
+                    )?;
+                    ctx.accounts.lp_vault.reload()?;
+                    ctx.accounts.kamino_deposit_account.reload()?;
+                    kamino_redeemed_usdc = ctx.accounts.lp_vault.amount
+                        .saturating_sub(lp_vault_before_cpi);
+                }
             }
         }
     }
