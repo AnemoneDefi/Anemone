@@ -40,9 +40,41 @@ export interface KeeperConfig {
   bridgeMainnetRpcUrl?: string;
 }
 
-function loadKeypair(path: string): Keypair {
-  const secret = JSON.parse(fs.readFileSync(path, "utf-8"));
-  return Keypair.fromSecretKey(Uint8Array.from(secret));
+function parseKeypairJson(raw: string, source: string): Keypair {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(`Failed to parse keypair JSON from ${source}: ${(err as Error).message}`);
+  }
+  if (!Array.isArray(parsed)) {
+    throw new Error(`Keypair from ${source} must be a JSON array of bytes`);
+  }
+  return Keypair.fromSecretKey(Uint8Array.from(parsed as number[]));
+}
+
+function loadKeypairFromFile(path: string): Keypair {
+  return parseKeypairJson(fs.readFileSync(path, "utf-8"), `file ${path}`);
+}
+
+/**
+ * Resolves a keypair from either an inline env var (preferred for cloud
+ * deploys — provider stores it as a secret) or a filesystem path (preferred
+ * for local dev). Looks up `${name}_JSON` first, then `${name}_PATH`.
+ *
+ * Returns null when neither is set; callers decide whether to throw or fall
+ * back (e.g. admin keypair is optional in mainnet mode).
+ */
+function loadKeypairFromEnv(name: string): Keypair | null {
+  const inline = process.env[`${name}_JSON`];
+  if (inline && inline.trim().length > 0) {
+    return parseKeypairJson(inline, `env ${name}_JSON`);
+  }
+  const path = process.env[`${name}_PATH`];
+  if (path && path.trim().length > 0) {
+    return loadKeypairFromFile(path);
+  }
+  return null;
 }
 
 function required(name: string): string {
@@ -90,12 +122,30 @@ export function loadConfig(): KeeperConfig {
     10,
   );
 
-  const keeperKeypair = loadKeypair(required("KEYPAIR_PATH"));
+  // KEEPER_KEYPAIR_JSON (inline) or KEEPER_KEYPAIR_PATH (file). Falls back to
+  // the legacy KEYPAIR_PATH for backwards compatibility with existing .env
+  // files that pre-date the cloud-deploy refactor.
+  let keeperKeypair = loadKeypairFromEnv("KEEPER_KEYPAIR");
+  if (!keeperKeypair) {
+    const legacy = process.env.KEYPAIR_PATH;
+    if (legacy) keeperKeypair = loadKeypairFromFile(legacy);
+  }
+  if (!keeperKeypair) {
+    throw new Error(
+      "Missing keeper keypair: set KEEPER_KEYPAIR_JSON (inline secret) or KEEPER_KEYPAIR_PATH (file path)",
+    );
+  }
 
-  // Admin keypair is only required for stub oracle mode (set_rate_index_oracle)
-  const adminPath = process.env.ADMIN_KEYPAIR_PATH;
-  const adminKeypair =
-    useStubOracle && adminPath ? loadKeypair(adminPath) : null;
+  // Admin keypair: only required in stub-oracle mode (set_rate_index_oracle is
+  // admin-gated). Same env-var convention as the keeper.
+  let adminKeypair: Keypair | null = null;
+  if (useStubOracle) {
+    adminKeypair = loadKeypairFromEnv("ADMIN_KEYPAIR");
+    if (!adminKeypair) {
+      const legacy = process.env.ADMIN_KEYPAIR_PATH;
+      if (legacy) adminKeypair = loadKeypairFromFile(legacy);
+    }
+  }
 
   const bridgeMainnetRpcUrl = process.env.BRIDGE_MAINNET_RPC_URL || undefined;
 

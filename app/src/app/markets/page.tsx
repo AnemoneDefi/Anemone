@@ -7,6 +7,7 @@ import { Nav } from "@/components/Nav";
 import { Footer } from "@/components/Footer";
 import { RevealOnScroll } from "@/components/RevealOnScroll";
 import { useMarkets } from "@/lib/hooks";
+import { useProtocolStats } from "@/lib/analytics";
 import {
   formatApy,
   formatTenor,
@@ -90,6 +91,11 @@ function StatsBar({
 }) {
   const live = rows.filter((r) => r.kind === "live").length;
   const soon = rows.filter((r) => r.kind === "soon").length;
+  const { data: protocolStats } = useProtocolStats();
+  const volumeUsdc =
+    protocolStats?.total_volume_usdc != null
+      ? BigInt(protocolStats.total_volume_usdc)
+      : null;
   return (
     <div className={`${s.stats} reveal`}>
       <div className={s.stat}>
@@ -108,9 +114,13 @@ function StatsBar({
         <span className={s.statSub}>Across all traders</span>
       </div>
       <div className={s.stat}>
-        <span className={s.statKey}>Volume (24h)</span>
-        <span className={s.statValue}>—</span>
-        <span className={s.statSub}>Indexer pending</span>
+        <span className={s.statKey}>Lifetime volume</span>
+        <span className={s.statValue}>
+          {volumeUsdc != null ? formatUsdcCompact(volumeUsdc) : "—"}
+        </span>
+        <span className={s.statSub}>
+          {volumeUsdc != null ? "From event indexer" : "Indexer pending"}
+        </span>
       </div>
     </div>
   );

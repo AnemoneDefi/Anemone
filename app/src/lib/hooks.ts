@@ -19,10 +19,30 @@ export function useProtocol(): SWRResponse<Protocol | null, Error> {
   );
 }
 
+// Optional whitelist of market PDAs (comma-separated). When set, fetchAll
+// results are filtered down to this set. Used on devnet to hide ghost markets
+// from previous program deployments whose stored bytes deserialize as garbage
+// under the current IDL (see devnet upgrade 2026-05-05). Empty/unset = no
+// filter (production default).
+const MARKET_WHITELIST: ReadonlySet<string> = new Set(
+  (process.env.NEXT_PUBLIC_MARKET_WHITELIST ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0)
+);
+
+function passesWhitelist(m: Market): boolean {
+  if (MARKET_WHITELIST.size === 0) return true;
+  return MARKET_WHITELIST.has(m.publicKey);
+}
+
 export function useMarkets(): SWRResponse<Market[], Error> {
   return useSWR<Market[]>(
     "anemone:markets",
-    () => getReadonlyClient().query.markets.fetchAll(),
+    async () => {
+      const all = await getReadonlyClient().query.markets.fetchAll();
+      return all.filter(passesWhitelist);
+    },
     { refreshInterval: REFRESH_MS }
   );
 }

@@ -54,13 +54,23 @@ export function formatTenor(seconds: bigint): string {
  *
  * Returns APY in basis points (e.g. 532n = 5.32%). Returns 0n if inputs are unusable.
  */
+// Reject extrapolations from very-short windows where Taylor evaluation can
+// be dominated by floor noise (sub-second elapsed). The output cap below
+// handles the real failure mode (huge delta in a tight window producing
+// astronomical APY); this floor is just a degenerate-input guard.
+const MIN_RATE_WINDOW_SECONDS = 5n;
+
+// Anything above this is the Taylor series exploding rather than a real APY;
+// 10_000_000 bps = 100_000% APY. Real lending markets sit well below 1_000%.
+const APY_BPS_SANITY_CAP = 10_000_000n;
+
 export function calculateApyBps(
   previousRateIndex: bigint,
   currentRateIndex: bigint,
   elapsedSeconds: bigint
 ): bigint {
   if (
-    elapsedSeconds <= 0n ||
+    elapsedSeconds < MIN_RATE_WINDOW_SECONDS ||
     previousRateIndex <= 0n ||
     currentRateIndex < previousRateIndex
   ) {
@@ -85,7 +95,8 @@ export function calculateApyBps(
     ((((n * nMinus1) / PRECISION) * nMinus2) / PRECISION) * rCubed / PRECISION / 6n;
 
   const apyScaled = term1 + term2 + term3;
-  return (apyScaled * BPS_SCALE) / PRECISION;
+  const apyBps = (apyScaled * BPS_SCALE) / PRECISION;
+  return apyBps > APY_BPS_SANITY_CAP ? 0n : apyBps;
 }
 
 export function formatApy(

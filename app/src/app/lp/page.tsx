@@ -27,6 +27,8 @@ import { buildClient } from "@/lib/anemone";
 import {
   resolveKaminoCpiAccounts,
   buildRefreshReserveIx,
+  buildSyncKaminoYieldStubIx,
+  IS_KAMINO_STUB,
   KAMINO_USDC_LENDING_MARKET,
   KAMINO_SCOPE_PRICES,
   KAMINO_PROGRAM_ID,
@@ -39,6 +41,7 @@ import {
   formatUsdcCompact,
   utilizationPct,
 } from "@/lib/format";
+import { useMarketStats, rateHistoryToApyPoints } from "@/lib/analytics";
 import s from "./lp.module.css";
 
 const USDC_DECIMALS = 6;
@@ -184,16 +187,19 @@ function PoolStrip({ market }: { market: Market | null | undefined }) {
 
 // ─── Hero / charts (kept mocked per partner spec) ──────────────────────────
 
-function HeroChart() {
+const HERO_MOCK_SERIES = [
+  8.4, 8.7, 9.1, 8.8, 9.0, 8.5, 7.9, 8.2, 8.6, 9.2,
+  9.4, 9.1, 8.8, 8.3, 7.7, 7.1, 6.4, 5.2, 3.8, 2.4,
+  1.5, 2.8, 4.6, 6.1, 7.3, 8.0, 8.6, 9.0, 9.1, 9.2, 9.3,
+];
+
+function HeroChart({ series }: { series: number[] }) {
   const W = 720, H = 200, PADL = 44, PADR = 16, PADT = 8, PADB = 26;
-  const yMin = 0, yMax = 12;
+  const yMin = 0;
+  const dataMax = series.length ? Math.max(...series) : 12;
+  const yMax = Math.max(12, Math.ceil(dataMax + 1));
   const kamY = 6.8;
-  const days = 30;
-  const series = [
-    8.4, 8.7, 9.1, 8.8, 9.0, 8.5, 7.9, 8.2, 8.6, 9.2,
-    9.4, 9.1, 8.8, 8.3, 7.7, 7.1, 6.4, 5.2, 3.8, 2.4,
-    1.5, 2.8, 4.6, 6.1, 7.3, 8.0, 8.6, 9.0, 9.1, 9.2, 9.3,
-  ];
+  const days = Math.max(1, series.length - 1);
   const dates = ["Mar 24", "Mar 31", "Apr 07", "Apr 14", "Apr 21"];
   const xS = (i: number) => PADL + (i / days) * (W - PADL - PADR);
   const yS = (v: number) =>
@@ -268,7 +274,19 @@ function HeroChart() {
   );
 }
 
-function Hero() {
+function Hero({ marketAddress }: { marketAddress: string | null }) {
+  const { data: marketStats } = useMarketStats(marketAddress);
+  const liveSeries = useMemo(
+    () => rateHistoryToApyPoints(marketStats?.rate_history).map((p) => p.apyPct),
+    [marketStats?.rate_history]
+  );
+  const series = liveSeries.length >= 2 ? liveSeries : HERO_MOCK_SERIES;
+  const isLive = liveSeries.length >= 2;
+  const avg = series.length ? series.reduce((a, b) => a + b, 0) / series.length : 0;
+  const lo = series.length ? Math.min(...series) : 0;
+  const hi = series.length ? Math.max(...series) : 0;
+  const current = series.length ? series[series.length - 1] : 0;
+  const KAMINO_REF = 6.8;
   return (
     <section className={s.heroPitch}>
       <div className={`${s.heroInner} reveal`}>
@@ -278,33 +296,37 @@ function Hero() {
         <div className={s.apyHero}>
           <div className={s.apyChartCol}>
             <div className={s.apyChartHead}>
-              <span className={s.apyEyebrow}>Realized APY · Last 30 Days (mock — historical indexer pending)</span>
+              <span className={s.apyEyebrow}>
+                Realized APY · {isLive ? "Live indexer feed" : "Historical preview (indexer warming up)"}
+              </span>
               <div className={s.apyToggle}>
                 <button className={s.apyTg} type="button">7D</button>
                 <button className={`${s.apyTg} ${s.active}`} type="button">30D</button>
                 <button className={s.apyTg} type="button">ALL</button>
               </div>
             </div>
-            <HeroChart />
+            <HeroChart series={series} />
             <div className={s.apyFoot}>
               LP yield moves above and below Kamino direct as swap exposure settles.
             </div>
           </div>
           <div className={s.apySummary}>
             <div className={s.apySumBlock}>
-              <span className={s.apySumLbl}>30D Average</span>
+              <span className={s.apySumLbl}>{isLive ? "Average" : "30D Average"}</span>
               <span className={s.apySumValue}>
-                <span className="tilde">~</span>7.4%
+                <span className="tilde">~</span>{avg.toFixed(1)}%
               </span>
-              <span className={s.apySumSub}>range 1.5% – 10.1%</span>
+              <span className={s.apySumSub}>range {lo.toFixed(1)}% – {hi.toFixed(1)}%</span>
             </div>
             <div className={s.apySumSep} />
             <div className={s.apySumBlock}>
               <span className={s.apySumLbl}>Current</span>
               <span className={s.apySumValue}>
-                <span className="tilde">~</span>9.3%
+                <span className="tilde">~</span>{current.toFixed(1)}%
               </span>
-              <span className={`${s.apySumSub} ${s.pink}`}>+2.5% vs Kamino</span>
+              <span className={`${s.apySumSub} ${s.pink}`}>
+                {(current - KAMINO_REF >= 0 ? "+" : "") + (current - KAMINO_REF).toFixed(1)}% vs Kamino
+              </span>
             </div>
           </div>
         </div>
@@ -419,28 +441,35 @@ function DepositCard({ market, protocol, lpPosition, refresh }: DepositCardProps
         );
       }
 
-      // 2. Bundle refresh_reserve + sync_kamino_yield so deposit_liquidity's
+      // 2. Bundle sync_kamino_yield so deposit_liquidity's
       //    MAX_NAV_STALENESS_SECS gate passes. In production the keeper bot
       //    runs sync every 5 min, but in dev the user is the keeper.
-      preInstructions.push(buildRefreshReserveIx(reserve));
-      const syncIx = await client.program.methods
-        .syncKaminoYield()
-        .accountsStrict({
-          market: marketPda,
-          kaminoReserve: reserve,
-          kaminoDepositAccount,
-          kaminoLendingMarket: KAMINO_USDC_LENDING_MARKET,
-          // Reserve uses Scope only — pass kaminoProgram as placeholder for
-          // pyth/switchboard slots (per SyncKaminoYield doc).
-          pythOracle: KAMINO_PROGRAM_ID,
-          switchboardPriceOracle: KAMINO_PROGRAM_ID,
-          switchboardTwapOracle: KAMINO_PROGRAM_ID,
-          scopePrices: KAMINO_SCOPE_PRICES,
-          kaminoProgram: KAMINO_PROGRAM_ID,
-          tokenProgram: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
-        })
-        .instruction();
-      preInstructions.push(syncIx);
+      if (IS_KAMINO_STUB) {
+        // Devnet/localnet: stub build, sync takes only `market`. Skip refresh.
+        preInstructions.push(
+          buildSyncKaminoYieldStubIx(client.program.programId, marketPda),
+        );
+      } else {
+        preInstructions.push(buildRefreshReserveIx(reserve));
+        const syncIx = await client.program.methods
+          .syncKaminoYield()
+          .accountsStrict({
+            market: marketPda,
+            kaminoReserve: reserve,
+            kaminoDepositAccount,
+            kaminoLendingMarket: KAMINO_USDC_LENDING_MARKET,
+            // Reserve uses Scope only — pass kaminoProgram as placeholder for
+            // pyth/switchboard slots (per SyncKaminoYield doc).
+            pythOracle: KAMINO_PROGRAM_ID,
+            switchboardPriceOracle: KAMINO_PROGRAM_ID,
+            switchboardTwapOracle: KAMINO_PROGRAM_ID,
+            scopePrices: KAMINO_SCOPE_PRICES,
+            kaminoProgram: KAMINO_PROGRAM_ID,
+            tokenProgram: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
+          })
+          .instruction();
+        preInstructions.push(syncIx);
+      }
 
       const result = await client.lp.depositLiquidity.execute({
         depositor: anchorWallet.publicKey,
@@ -478,32 +507,47 @@ function DepositCard({ market, protocol, lpPosition, refresh }: DepositCardProps
     setPending(true);
     try {
       const reserve = new PublicKey(market.underlyingReserve);
-      const kamino = await resolveKaminoCpiAccounts(connection, reserve);
+      // In stub-oracle builds (devnet/localnet) Kamino doesn't exist; resolve
+      // against RPC would fail. The program never dereferences these accounts
+      // in stub mode, so any pubkeys satisfying the Anchor type checks work.
+      const kamino = IS_KAMINO_STUB
+        ? {
+            kaminoLendingMarket: KAMINO_PROGRAM_ID,
+            kaminoLendingMarketAuthority: KAMINO_PROGRAM_ID,
+            reserveLiquiditySupply: KAMINO_PROGRAM_ID,
+            reserveCollateralMint: KAMINO_PROGRAM_ID,
+          }
+        : await resolveKaminoCpiAccounts(connection, reserve);
       const client = buildClient(anchorWallet);
       const marketPda = new PublicKey(market.publicKey);
       const kaminoDepositAccount = new PublicKey(market.kaminoDepositAccount);
 
-      // Bundle refresh_reserve + sync_kamino_yield so request_withdrawal's
+      // Bundle sync_kamino_yield so request_withdrawal's
       // MAX_NAV_STALENESS_SECS gate passes. Same pattern as deposit.
-      const preInstructions: TransactionInstruction[] = [
-        buildRefreshReserveIx(reserve),
-      ];
-      const syncIx = await client.program.methods
-        .syncKaminoYield()
-        .accountsStrict({
-          market: marketPda,
-          kaminoReserve: reserve,
-          kaminoDepositAccount,
-          kaminoLendingMarket: KAMINO_USDC_LENDING_MARKET,
-          pythOracle: KAMINO_PROGRAM_ID,
-          switchboardPriceOracle: KAMINO_PROGRAM_ID,
-          switchboardTwapOracle: KAMINO_PROGRAM_ID,
-          scopePrices: KAMINO_SCOPE_PRICES,
-          kaminoProgram: KAMINO_PROGRAM_ID,
-          tokenProgram: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
-        })
-        .instruction();
-      preInstructions.push(syncIx);
+      const preInstructions: TransactionInstruction[] = [];
+      if (IS_KAMINO_STUB) {
+        preInstructions.push(
+          buildSyncKaminoYieldStubIx(client.program.programId, marketPda),
+        );
+      } else {
+        preInstructions.push(buildRefreshReserveIx(reserve));
+        const syncIx = await client.program.methods
+          .syncKaminoYield()
+          .accountsStrict({
+            market: marketPda,
+            kaminoReserve: reserve,
+            kaminoDepositAccount,
+            kaminoLendingMarket: KAMINO_USDC_LENDING_MARKET,
+            pythOracle: KAMINO_PROGRAM_ID,
+            switchboardPriceOracle: KAMINO_PROGRAM_ID,
+            switchboardTwapOracle: KAMINO_PROGRAM_ID,
+            scopePrices: KAMINO_SCOPE_PRICES,
+            kaminoProgram: KAMINO_PROGRAM_ID,
+            tokenProgram: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
+          })
+          .instruction();
+        preInstructions.push(syncIx);
+      }
 
       const result = await client.lp.requestWithdrawal.execute({
         withdrawer: anchorWallet.publicKey,
@@ -963,7 +1007,7 @@ function LpPageContent() {
       <RevealOnScroll />
       <Nav />
       <PoolStrip market={market} />
-      <Hero />
+      <Hero marketAddress={marketAddress} />
       <section className={s.workspace}>
         <div className={`wrap ${s.workspaceGrid}`}>
           <DepositCard

@@ -2,6 +2,7 @@ use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{Mint, TokenAccount, TokenInterface};
 use crate::state::{SwapMarket, ProtocolState};
 use crate::errors::AnemoneError;
+#[cfg(not(feature = "stub-oracle"))]
 use crate::helpers::cpi_deposit_to_kamino;
 
 #[derive(Accounts)]
@@ -91,55 +92,69 @@ pub fn handle_deposit_to_kamino(
 ) -> Result<()> {
     require!(amount > 0, AnemoneError::InvalidAmount);
 
-    let market = &ctx.accounts.market;
+    // Stub-oracle builds (devnet/localnet) have no Kamino: USDC stays in
+    // lp_vault and the snapshot tracking stays at zero. Return early without
+    // touching state so a stray keeper call is a clear no-op rather than a
+    // confusing CPI failure.
+    #[cfg(feature = "stub-oracle")]
+    {
+        let _ = (&ctx, amount); // silence unused-variable in stub
+        msg!("deposit_to_kamino: skipped (stub-oracle build)");
+        return Ok(());
+    }
 
-    // Build PDA signer seeds
-    let reserve_key = market.underlying_reserve;
-    let tenor_bytes = market.tenor_seconds.to_le_bytes();
-    let bump = market.bump;
-    let signer_seeds: &[&[&[u8]]] = &[&[
-        b"market",
-        reserve_key.as_ref(),
-        &tenor_bytes,
-        &[bump],
-    ]];
+    #[cfg(not(feature = "stub-oracle"))]
+    {
+        let market = &ctx.accounts.market;
 
-    // CPI: deposit USDC from lp_vault → Kamino
-    cpi_deposit_to_kamino(
-        &ctx.accounts.kamino_program,
-        &ctx.accounts.market.to_account_info(),
-        signer_seeds,
-        &ctx.accounts.kamino_reserve,
-        &ctx.accounts.kamino_lending_market,
-        &ctx.accounts.kamino_lending_market_authority,
-        &ctx.accounts.reserve_liquidity_mint.to_account_info(),
-        &ctx.accounts.reserve_liquidity_supply,
-        &ctx.accounts.reserve_collateral_mint,
-        &ctx.accounts.lp_vault.to_account_info(),
-        &ctx.accounts.kamino_deposit_account.to_account_info(),
-        &ctx.accounts.collateral_token_program.to_account_info(),
-        &ctx.accounts.liquidity_token_program.to_account_info(),
-        &ctx.accounts.instruction_sysvar_account,
-        amount,
-    )?;
+        // Build PDA signer seeds
+        let reserve_key = market.underlying_reserve;
+        let tenor_bytes = market.tenor_seconds.to_le_bytes();
+        let bump = market.bump;
+        let signer_seeds: &[&[&[u8]]] = &[&[
+            b"market",
+            reserve_key.as_ref(),
+            &tenor_bytes,
+            &[bump],
+        ]];
 
-    // Update tracking — read new k-token balance and bump the USDC snapshot
-    // by the amount we just deposited. The k-tokens we just received are
-    // worth exactly `amount` USDC right now (Kamino mints them at the
-    // current exchange rate), so the snapshot — which represents "USDC
-    // value of our k-tokens at the last sync, plus deposits, minus
-    // withdrawals" — grows by exactly `amount`. The next sync_kamino_yield
-    // diff (kamino_value - snapshot) then isolates the yield earned on top
-    // of principal, with no double-count.
-    ctx.accounts.kamino_deposit_account.reload()?;
-    let market = &mut ctx.accounts.market;
-    market.total_kamino_collateral = ctx.accounts.kamino_deposit_account.amount;
-    market.last_kamino_snapshot_usdc = market.last_kamino_snapshot_usdc
-        .checked_add(amount)
-        .ok_or(AnemoneError::MathOverflow)?;
+        // CPI: deposit USDC from lp_vault → Kamino
+        cpi_deposit_to_kamino(
+            &ctx.accounts.kamino_program,
+            &ctx.accounts.market.to_account_info(),
+            signer_seeds,
+            &ctx.accounts.kamino_reserve,
+            &ctx.accounts.kamino_lending_market,
+            &ctx.accounts.kamino_lending_market_authority,
+            &ctx.accounts.reserve_liquidity_mint.to_account_info(),
+            &ctx.accounts.reserve_liquidity_supply,
+            &ctx.accounts.reserve_collateral_mint,
+            &ctx.accounts.lp_vault.to_account_info(),
+            &ctx.accounts.kamino_deposit_account.to_account_info(),
+            &ctx.accounts.collateral_token_program.to_account_info(),
+            &ctx.accounts.liquidity_token_program.to_account_info(),
+            &ctx.accounts.instruction_sysvar_account,
+            amount,
+        )?;
 
-    msg!("Deposited {} USDC to Kamino", amount);
-    msg!("Market: {}", market.key());
+        // Update tracking — read new k-token balance and bump the USDC snapshot
+        // by the amount we just deposited. The k-tokens we just received are
+        // worth exactly `amount` USDC right now (Kamino mints them at the
+        // current exchange rate), so the snapshot — which represents "USDC
+        // value of our k-tokens at the last sync, plus deposits, minus
+        // withdrawals" — grows by exactly `amount`. The next sync_kamino_yield
+        // diff (kamino_value - snapshot) then isolates the yield earned on top
+        // of principal, with no double-count.
+        ctx.accounts.kamino_deposit_account.reload()?;
+        let market = &mut ctx.accounts.market;
+        market.total_kamino_collateral = ctx.accounts.kamino_deposit_account.amount;
+        market.last_kamino_snapshot_usdc = market.last_kamino_snapshot_usdc
+            .checked_add(amount)
+            .ok_or(AnemoneError::MathOverflow)?;
 
-    Ok(())
+        msg!("Deposited {} USDC to Kamino", amount);
+        msg!("Market: {}", market.key());
+
+        Ok(())
+    }
 }

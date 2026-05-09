@@ -1,21 +1,31 @@
 use crate::errors::AnemoneError;
+use crate::state::SwapDirection;
 
-/// Calculates the total spread in basis points for pricing a swap.
+/// Skew sensitivity coefficient. At full directional imbalance
+/// (|N_fixed - N_variable| == lp_nav), the skew shifts the midpoint by this
+/// many basis points. Tunable per-market in v0.2; v0.1 ships with a
+/// program-wide constant.
+pub const SKEW_K_BPS: i128 = 200;
+
+/// Returns the symmetric and skew components of the quoted spread.
 ///
-/// S_total = S_base + S_util + S_imbal
-///
-/// - S_base: fixed base spread (e.g. 80 bps = 0.8%)
-/// - S_util: utilization-driven spread, scales linearly from 0 to S_base at max utilization
-/// - S_imbal: directional imbalance spread, penalizes one-sided markets
-pub fn calculate_spread_bps(
+/// - `base_plus_util_bps`: positive — base spread plus utilization premium.
+///   Applied symmetrically (PayFixed adds it above APY, ReceiveFixed
+///   subtracts it below APY). Always paid by the trader, always earned by LP.
+/// - `skew_bps_signed`: signed — positive when fixed dominates, negative
+///   when variable dominates. Applied with the SAME sign in both directions
+///   (it is a midpoint shift, not a bilateral spread). This shifts the
+///   quoted rates so the dominant side pays more and the rebalancing side
+///   gets a relative discount.
+pub fn calculate_spread_components(
     base_spread_bps: u16,
     max_utilization_bps: u16,
     lp_nav: u64,
     total_fixed_notional: u64,
     total_variable_notional: u64,
-) -> Result<u64, AnemoneError> {
+) -> Result<(u64, i64), AnemoneError> {
     if lp_nav == 0 {
-        return Ok(base_spread_bps as u64);
+        return Ok((base_spread_bps as u64, 0));
     }
 
     let base = base_spread_bps as u128;
@@ -26,39 +36,59 @@ pub fn calculate_spread_bps(
         .checked_add(total_variable_notional as u128)
         .ok_or(AnemoneError::MathOverflow)?;
 
-    // utilization_bps = total_notional * 10_000 / deposits
     let utilization_bps = total_notional
         .checked_mul(10_000)
         .and_then(|v| v.checked_div(deposits))
         .ok_or(AnemoneError::MathOverflow)?;
 
-    // S_util = base_spread * utilization / max_utilization
-    // Caps at max_utilization to avoid runaway spread
     let capped_util = utilization_bps.min(max_util);
-    let s_util = base
-        .checked_mul(capped_util)
-        .and_then(|v| v.checked_div(max_util))
-        .ok_or(AnemoneError::MathOverflow)?;
-
-    // S_imbal = |N_fixed - N_variable| * 100 / lp_nav
-    // 100 bps (1%) at full imbalance ratio of 1.0
-    let imbalance = if total_fixed_notional >= total_variable_notional {
-        (total_fixed_notional - total_variable_notional) as u128
+    let s_util = if max_util == 0 {
+        0u128
     } else {
-        (total_variable_notional - total_fixed_notional) as u128
+        base.checked_mul(capped_util)
+            .and_then(|v| v.checked_div(max_util))
+            .ok_or(AnemoneError::MathOverflow)?
     };
 
-    let s_imbal = imbalance
-        .checked_mul(100)
-        .and_then(|v| v.checked_div(deposits))
-        .ok_or(AnemoneError::MathOverflow)?;
-
-    let s_total = base
+    let base_plus_util = base
         .checked_add(s_util)
-        .and_then(|v| v.checked_add(s_imbal))
         .ok_or(AnemoneError::MathOverflow)?;
+    let base_plus_util_u64 = u64::try_from(base_plus_util)
+        .map_err(|_| AnemoneError::MathOverflow)?;
 
-    Ok(s_total as u64)
+    let n_fixed = total_fixed_notional as i128;
+    let n_variable = total_variable_notional as i128;
+    let imbalance = n_fixed
+        .checked_sub(n_variable)
+        .ok_or(AnemoneError::MathOverflow)?;
+    let skew = imbalance
+        .checked_mul(SKEW_K_BPS)
+        .and_then(|v| v.checked_div(deposits as i128))
+        .ok_or(AnemoneError::MathOverflow)?;
+    let skew_i64 = i64::try_from(skew).map_err(|_| AnemoneError::MathOverflow)?;
+
+    Ok((base_plus_util_u64, skew_i64))
+}
+
+/// Per-direction effective spread `bps` between the offered fixed rate and
+/// `current_apy_bps`. Always >= `base_spread_bps` (LP earnings floor) — the
+/// floor caps the rebalancing discount in extreme imbalance so the LP is
+/// never asked to give up its base premium.
+pub fn effective_spread_bps(
+    base_plus_util_bps: u64,
+    skew_bps: i64,
+    direction: SwapDirection,
+    base_spread_bps: u16,
+) -> Result<u64, AnemoneError> {
+    // PayFixed quote = APY + base_plus_util + skew → effective spread = base_plus_util + skew
+    // ReceiveFixed quote = APY - base_plus_util + skew → effective spread = base_plus_util - skew
+    let raw: i128 = match direction {
+        SwapDirection::PayFixed => (base_plus_util_bps as i128) + (skew_bps as i128),
+        SwapDirection::ReceiveFixed => (base_plus_util_bps as i128) - (skew_bps as i128),
+    };
+    let floor = base_spread_bps as i128;
+    let clamped = raw.max(floor);
+    u64::try_from(clamped).map_err(|_| AnemoneError::MathOverflow)
 }
 
 /// Calculates the initial margin (collateral) required to open a swap position.
@@ -104,47 +134,76 @@ pub fn calculate_initial_margin(
 mod tests {
     use super::*;
 
-    // ========== calculate_spread_bps tests ==========
+    // ========== calculate_spread_components tests ==========
 
     #[test]
-    fn base_spread_only_no_utilization() {
-        let result = calculate_spread_bps(80, 6000, 1_000_000, 0, 0).unwrap();
-        assert_eq!(result, 80, "Empty pool should return base spread");
+    fn components_balanced_no_utilization() {
+        let (bpu, skew) = calculate_spread_components(80, 6000, 1_000_000, 0, 0).unwrap();
+        assert_eq!(bpu, 80, "Empty pool: base_plus_util = base");
+        assert_eq!(skew, 0, "Empty pool: skew = 0");
     }
 
     #[test]
-    fn half_utilization_no_imbalance() {
+    fn components_balanced_half_utilization() {
         // 30% utilization (half of 60% max), balanced
-        // S_base = 80, S_util = 80 * 3000/6000 = 40, S_imbal = 0
-        let result = calculate_spread_bps(80, 6000, 1_000_000, 150_000, 150_000).unwrap();
-        assert_eq!(result, 120, "50% of max util → S_base(80) + S_util(40) = 120");
+        let (bpu, skew) = calculate_spread_components(80, 6000, 1_000_000, 150_000, 150_000).unwrap();
+        assert_eq!(bpu, 120, "50% of max util → base(80) + util(40) = 120");
+        assert_eq!(skew, 0, "Balanced → skew = 0");
     }
 
     #[test]
-    fn max_utilization_no_imbalance() {
-        // 60% utilization (at max), balanced
-        let result = calculate_spread_bps(80, 6000, 1_000_000, 300_000, 300_000).unwrap();
-        assert_eq!(result, 160, "Max util → S_base(80) + S_util(80) = 160");
+    fn components_fixed_dominant() {
+        // 20% utilization, fully PayFixed (200_000 fixed, 0 variable, 1M lp_nav)
+        // skew = (200_000 - 0) * 200 / 1_000_000 = 40 bps
+        let (bpu, skew) = calculate_spread_components(80, 6000, 1_000_000, 200_000, 0).unwrap();
+        assert_eq!(bpu, 106, "20% util → base(80) + util(26) = 106");
+        assert_eq!(skew, 40, "Fixed dominant → skew = +40 bps");
     }
 
     #[test]
-    fn imbalanced_market() {
-        // 20% utilization, fully one-sided (all PayFixed, no ReceiveFixed)
-        let result = calculate_spread_bps(80, 6000, 1_000_000, 200_000, 0).unwrap();
-        assert_eq!(result, 126, "Imbalanced: S_base(80) + S_util(26) + S_imbal(20) = 126");
+    fn components_variable_dominant() {
+        let (bpu, skew) = calculate_spread_components(80, 6000, 1_000_000, 0, 200_000).unwrap();
+        assert_eq!(bpu, 106, "20% util → base(80) + util(26) = 106");
+        assert_eq!(skew, -40, "Variable dominant → skew = -40 bps");
     }
 
     #[test]
-    fn heavily_imbalanced_hot_market() {
-        // 50% utilization, all one side
-        let result = calculate_spread_bps(80, 6000, 1_000_000, 500_000, 0).unwrap();
-        assert_eq!(result, 196, "Hot imbalanced: S_base(80) + S_util(66) + S_imbal(50) = 196");
+    fn components_zero_deposits_returns_base() {
+        let (bpu, skew) = calculate_spread_components(80, 6000, 0, 0, 0).unwrap();
+        assert_eq!(bpu, 80);
+        assert_eq!(skew, 0);
+    }
+
+    // ========== effective_spread_bps tests ==========
+
+    #[test]
+    fn effective_spread_payfixed_dominant_charges_more() {
+        // skew=+40, bpu=106 → PayFixed effective = 106 + 40 = 146
+        let s = effective_spread_bps(106, 40, SwapDirection::PayFixed, 80).unwrap();
+        assert_eq!(s, 146);
     }
 
     #[test]
-    fn zero_deposits_returns_base() {
-        let result = calculate_spread_bps(80, 6000, 0, 0, 0).unwrap();
-        assert_eq!(result, 80, "Zero deposits should return base spread");
+    fn effective_spread_receivefixed_into_imbalance_gets_discount() {
+        // Fixed dominant (skew=+40), ReceiveFixed rebalances:
+        // RF effective = 106 - 40 = 66 → clamped to floor 80
+        let s = effective_spread_bps(106, 40, SwapDirection::ReceiveFixed, 80).unwrap();
+        assert_eq!(s, 80, "Floor enforces LP earns at least base_spread");
+    }
+
+    #[test]
+    fn effective_spread_receivefixed_no_clamp_when_mild() {
+        // Mild imbalance: bpu=200, skew=+50, RF = 200 - 50 = 150 (above floor 80)
+        let s = effective_spread_bps(200, 50, SwapDirection::ReceiveFixed, 80).unwrap();
+        assert_eq!(s, 150, "Mild imbalance: rebalancing trader gets reduced spread, no clamp");
+    }
+
+    #[test]
+    fn effective_spread_payfixed_into_variable_dominant_gets_discount() {
+        // Variable dominant (skew=-40), PayFixed rebalances:
+        // PF effective = 106 - 40 = 66 → clamped to floor 80
+        let s = effective_spread_bps(106, -40, SwapDirection::PayFixed, 80).unwrap();
+        assert_eq!(s, 80);
     }
 
     // ========== calculate_initial_margin tests ==========

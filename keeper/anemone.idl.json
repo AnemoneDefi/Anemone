@@ -1,0 +1,3884 @@
+{
+  "address": "KQs6ci5FtedFKPVJThAZSMMXyosK4TvnF7kcDSx5Jwd",
+  "metadata": {
+    "name": "anemone",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Created with Anchor"
+  },
+  "instructions": [
+    {
+      "name": "add_collateral",
+      "discriminator": [
+        127,
+        82,
+        121,
+        42,
+        161,
+        176,
+        249,
+        206
+      ],
+      "accounts": [
+        {
+          "name": "market",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market.underlying_reserve",
+                "account": "SwapMarket"
+              },
+              {
+                "kind": "account",
+                "path": "market.tenor_seconds",
+                "account": "SwapMarket"
+              }
+            ]
+          }
+        },
+        {
+          "name": "swap_position",
+          "writable": true
+        },
+        {
+          "name": "collateral_vault",
+          "docs": [
+            "Collateral vault — destination of the added USDC"
+          ],
+          "writable": true
+        },
+        {
+          "name": "underlying_mint",
+          "docs": [
+            "The underlying token mint (e.g. USDC)"
+          ]
+        },
+        {
+          "name": "owner_token_account",
+          "docs": [
+            "Owner's token account — source of the added collateral"
+          ],
+          "writable": true
+        },
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "token_program"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "claim_matured",
+      "discriminator": [
+        153,
+        42,
+        194,
+        25,
+        118,
+        63,
+        215,
+        10
+      ],
+      "accounts": [
+        {
+          "name": "market",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market.underlying_reserve",
+                "account": "SwapMarket"
+              },
+              {
+                "kind": "account",
+                "path": "market.tenor_seconds",
+                "account": "SwapMarket"
+              }
+            ]
+          }
+        },
+        {
+          "name": "swap_position",
+          "writable": true
+        },
+        {
+          "name": "lp_vault",
+          "docs": [
+            "LP vault — source of any unpaid_pnl catchup before claim."
+          ],
+          "writable": true
+        },
+        {
+          "name": "collateral_vault",
+          "docs": [
+            "Collateral vault — source of the matured collateral"
+          ],
+          "writable": true
+        },
+        {
+          "name": "owner_token_account",
+          "docs": [
+            "Owner's token account — receives collateral_remaining"
+          ],
+          "writable": true
+        },
+        {
+          "name": "underlying_mint",
+          "docs": [
+            "The underlying token mint (e.g. USDC)"
+          ]
+        },
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "kamino_deposit_account",
+          "writable": true
+        },
+        {
+          "name": "kamino_reserve",
+          "writable": true
+        },
+        {
+          "name": "kamino_lending_market"
+        },
+        {
+          "name": "kamino_lending_market_authority"
+        },
+        {
+          "name": "reserve_liquidity_mint"
+        },
+        {
+          "name": "reserve_liquidity_supply",
+          "writable": true
+        },
+        {
+          "name": "reserve_collateral_mint",
+          "writable": true
+        },
+        {
+          "name": "collateral_token_program"
+        },
+        {
+          "name": "liquidity_token_program"
+        },
+        {
+          "name": "instruction_sysvar_account"
+        },
+        {
+          "name": "kamino_program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "close_position_early",
+      "discriminator": [
+        43,
+        56,
+        118,
+        28,
+        75,
+        211,
+        91,
+        172
+      ],
+      "accounts": [
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "market",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market.underlying_reserve",
+                "account": "SwapMarket"
+              },
+              {
+                "kind": "account",
+                "path": "market.tenor_seconds",
+                "account": "SwapMarket"
+              }
+            ]
+          }
+        },
+        {
+          "name": "swap_position",
+          "writable": true
+        },
+        {
+          "name": "lp_vault",
+          "docs": [
+            "LP vault — source/dest for mark-to-market PnL settlement"
+          ],
+          "writable": true
+        },
+        {
+          "name": "collateral_vault",
+          "docs": [
+            "Collateral vault — holds the trader margin"
+          ],
+          "writable": true
+        },
+        {
+          "name": "treasury",
+          "docs": [
+            "Treasury — receives the 5% early close fee"
+          ],
+          "writable": true,
+          "relations": [
+            "protocol_state"
+          ]
+        },
+        {
+          "name": "underlying_mint",
+          "docs": [
+            "The underlying token mint (e.g. USDC)"
+          ]
+        },
+        {
+          "name": "owner_token_account",
+          "docs": [
+            "Owner's token account — receives remainder after fee"
+          ],
+          "writable": true
+        },
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "kamino_deposit_account",
+          "writable": true
+        },
+        {
+          "name": "kamino_reserve",
+          "docs": [
+            "only and never deserialized. The kamino_reserve PDA on devnet is a",
+            "placeholder generated at setup time."
+          ],
+          "writable": true
+        },
+        {
+          "name": "kamino_lending_market"
+        },
+        {
+          "name": "kamino_lending_market_authority"
+        },
+        {
+          "name": "reserve_liquidity_mint"
+        },
+        {
+          "name": "reserve_liquidity_supply",
+          "writable": true
+        },
+        {
+          "name": "reserve_collateral_mint",
+          "writable": true
+        },
+        {
+          "name": "collateral_token_program"
+        },
+        {
+          "name": "liquidity_token_program"
+        },
+        {
+          "name": "instruction_sysvar_account"
+        },
+        {
+          "name": "kamino_program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "create_market",
+      "discriminator": [
+        103,
+        226,
+        97,
+        235,
+        200,
+        188,
+        251,
+        254
+      ],
+      "accounts": [
+        {
+          "name": "protocol_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "market",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "underlying_reserve"
+              },
+              {
+                "kind": "arg",
+                "path": "tenor_seconds"
+              }
+            ]
+          }
+        },
+        {
+          "name": "lp_vault",
+          "docs": [
+            "LP vault: holds USDC in transit during settlements"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  112,
+                  95,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "collateral_vault",
+          "docs": [
+            "Collateral vault: holds trader collateral"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  108,
+                  108,
+                  97,
+                  116,
+                  101,
+                  114,
+                  97,
+                  108,
+                  95,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "lp_mint",
+          "docs": [
+            "LP token mint: receipt tokens for liquidity providers"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  112,
+                  95,
+                  109,
+                  105,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "kamino_deposit_account",
+          "docs": [
+            "Kamino deposit account: holds k-tokens (collateral from Kamino deposits)"
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  107,
+                  97,
+                  109,
+                  105,
+                  110,
+                  111,
+                  95,
+                  100,
+                  101,
+                  112,
+                  111,
+                  115,
+                  105,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "kamino_collateral_mint",
+          "docs": [
+            "The Kamino collateral mint (k-token, e.g. k-USDC)"
+          ]
+        },
+        {
+          "name": "underlying_reserve",
+          "docs": [
+            "The lending protocol's reserve account (e.g. Kamino USDC Reserve)"
+          ]
+        },
+        {
+          "name": "underlying_protocol",
+          "docs": [
+            "The lending protocol's program ID (e.g. Kamino K-Lend program)"
+          ]
+        },
+        {
+          "name": "underlying_mint",
+          "docs": [
+            "The token mint for this market (e.g. USDC mint)"
+          ]
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "protocol_state"
+          ]
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "token_program"
+        }
+      ],
+      "args": [
+        {
+          "name": "tenor_seconds",
+          "type": "i64"
+        },
+        {
+          "name": "settlement_period_seconds",
+          "type": "i64"
+        },
+        {
+          "name": "max_utilization_bps",
+          "type": "u16"
+        },
+        {
+          "name": "base_spread_bps",
+          "type": "u16"
+        },
+        {
+          "name": "max_lp_nav",
+          "type": "u64"
+        },
+        {
+          "name": "max_position_notional",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "deposit_liquidity",
+      "discriminator": [
+        245,
+        99,
+        59,
+        25,
+        151,
+        71,
+        233,
+        249
+      ],
+      "accounts": [
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "market",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market.underlying_reserve",
+                "account": "SwapMarket"
+              },
+              {
+                "kind": "account",
+                "path": "market.tenor_seconds",
+                "account": "SwapMarket"
+              }
+            ]
+          }
+        },
+        {
+          "name": "lp_position",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  112
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "depositor"
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "lp_vault",
+          "docs": [
+            "LP vault — PDA-controlled token account that holds USDC"
+          ],
+          "writable": true
+        },
+        {
+          "name": "lp_mint",
+          "docs": [
+            "LP token mint — program mints shares to depositor"
+          ],
+          "writable": true
+        },
+        {
+          "name": "underlying_mint",
+          "docs": [
+            "The underlying token mint (e.g. USDC) — needed for transfer_checked"
+          ]
+        },
+        {
+          "name": "depositor_token_account",
+          "docs": [
+            "Depositor's USDC token account (source of funds)"
+          ],
+          "writable": true
+        },
+        {
+          "name": "depositor_lp_token_account",
+          "docs": [
+            "Depositor's LP token account (receives minted shares). Auto-init for",
+            "first-time depositors so the frontend doesn't have to bundle a separate",
+            "`createAssociatedTokenAccount` instruction."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "depositor"
+              },
+              {
+                "kind": "account",
+                "path": "token_program"
+              },
+              {
+                "kind": "account",
+                "path": "lp_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "depositor",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "deposit_to_kamino",
+      "discriminator": [
+        107,
+        90,
+        118,
+        214,
+        59,
+        19,
+        144,
+        80
+      ],
+      "accounts": [
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "keeper",
+          "signer": true
+        },
+        {
+          "name": "market",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market.underlying_reserve",
+                "account": "SwapMarket"
+              },
+              {
+                "kind": "account",
+                "path": "market.tenor_seconds",
+                "account": "SwapMarket"
+              }
+            ]
+          }
+        },
+        {
+          "name": "lp_vault",
+          "docs": [
+            "Our LP vault — source of USDC"
+          ],
+          "writable": true
+        },
+        {
+          "name": "kamino_deposit_account",
+          "docs": [
+            "Our kamino deposit account — receives k-tokens"
+          ],
+          "writable": true
+        },
+        {
+          "name": "kamino_reserve",
+          "docs": [
+            "Kamino Reserve (e.g. USDC Reserve)"
+          ],
+          "writable": true
+        },
+        {
+          "name": "kamino_lending_market",
+          "docs": [
+            "Kamino LendingMarket"
+          ]
+        },
+        {
+          "name": "kamino_lending_market_authority",
+          "docs": [
+            "Kamino LendingMarket authority PDA"
+          ]
+        },
+        {
+          "name": "reserve_liquidity_mint",
+          "docs": [
+            "USDC mint (reserve liquidity mint)"
+          ]
+        },
+        {
+          "name": "reserve_liquidity_supply",
+          "docs": [
+            "Kamino's USDC vault"
+          ],
+          "writable": true
+        },
+        {
+          "name": "reserve_collateral_mint",
+          "docs": [
+            "k-USDC mint (reserve collateral mint)"
+          ],
+          "writable": true
+        },
+        {
+          "name": "collateral_token_program",
+          "docs": [
+            "Token program for k-tokens"
+          ]
+        },
+        {
+          "name": "liquidity_token_program",
+          "docs": [
+            "Token program for USDC"
+          ]
+        },
+        {
+          "name": "instruction_sysvar_account",
+          "docs": [
+            "Instructions sysvar"
+          ]
+        },
+        {
+          "name": "kamino_program",
+          "docs": [
+            "Kamino K-Lend program — must match market.underlying_protocol"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "initialize_protocol",
+      "discriminator": [
+        188,
+        233,
+        252,
+        106,
+        134,
+        146,
+        202,
+        91
+      ],
+      "accounts": [
+        {
+          "name": "protocol_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "treasury",
+          "docs": [
+            "Treasury token account. Anchor validates it deserializes as a token",
+            "account here so admin typos surface at init instead of at the first",
+            "fee transfer (Finding 8). Mint isn't checked at init because the",
+            "protocol's underlying mint is set per-market — downstream handlers",
+            "(open_swap, request_withdrawal, etc.) enforce",
+            "`token::mint = underlying_mint` against this same address."
+          ]
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "protocol_fee_bps",
+          "type": "u16"
+        },
+        {
+          "name": "opening_fee_bps",
+          "type": "u16"
+        },
+        {
+          "name": "liquidation_fee_bps",
+          "type": "u16"
+        },
+        {
+          "name": "withdrawal_fee_bps",
+          "type": "u16"
+        },
+        {
+          "name": "early_close_fee_bps",
+          "type": "u16"
+        }
+      ]
+    },
+    {
+      "name": "liquidate_position",
+      "discriminator": [
+        187,
+        74,
+        229,
+        149,
+        102,
+        81,
+        221,
+        68
+      ],
+      "accounts": [
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "market",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market.underlying_reserve",
+                "account": "SwapMarket"
+              },
+              {
+                "kind": "account",
+                "path": "market.tenor_seconds",
+                "account": "SwapMarket"
+              }
+            ]
+          }
+        },
+        {
+          "name": "swap_position",
+          "writable": true
+        },
+        {
+          "name": "lp_vault",
+          "docs": [
+            "LP vault — source/dest for mark-to-market PnL settled on liquidation"
+          ],
+          "writable": true
+        },
+        {
+          "name": "collateral_vault",
+          "docs": [
+            "Collateral vault — source of fee + remainder, and dest/source for MtM"
+          ],
+          "writable": true
+        },
+        {
+          "name": "owner",
+          "docs": [
+            "Owner of the position — receives rent on close, no signer required"
+          ],
+          "writable": true
+        },
+        {
+          "name": "owner_token_account",
+          "docs": [
+            "Owner's token account — receives remainder after liquidation fee"
+          ],
+          "writable": true
+        },
+        {
+          "name": "liquidator_token_account",
+          "docs": [
+            "Liquidator's token account — receives the liquidator's share of the",
+            "liquidation fee (2/3 of the total)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "treasury",
+          "docs": [
+            "Treasury — receives the protocol's share of the liquidation fee",
+            "(1/3 of the total). Same address as `protocol_state.treasury`."
+          ],
+          "writable": true
+        },
+        {
+          "name": "underlying_mint",
+          "docs": [
+            "The underlying token mint (e.g. USDC)"
+          ]
+        },
+        {
+          "name": "liquidator",
+          "docs": [
+            "Anyone can liquidate (permissionless — earns the liquidator's 2/3",
+            "share of liquidation_fee_bps as incentive; the remaining 1/3 goes",
+            "to treasury)."
+          ],
+          "signer": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "kamino_deposit_account",
+          "writable": true
+        },
+        {
+          "name": "kamino_reserve",
+          "writable": true
+        },
+        {
+          "name": "kamino_lending_market"
+        },
+        {
+          "name": "kamino_lending_market_authority"
+        },
+        {
+          "name": "reserve_liquidity_mint"
+        },
+        {
+          "name": "reserve_liquidity_supply",
+          "writable": true
+        },
+        {
+          "name": "reserve_collateral_mint",
+          "writable": true
+        },
+        {
+          "name": "collateral_token_program"
+        },
+        {
+          "name": "liquidity_token_program"
+        },
+        {
+          "name": "instruction_sysvar_account"
+        },
+        {
+          "name": "kamino_program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "open_swap",
+      "discriminator": [
+        109,
+        109,
+        21,
+        132,
+        201,
+        76,
+        67,
+        113
+      ],
+      "accounts": [
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "market",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market.underlying_reserve",
+                "account": "SwapMarket"
+              },
+              {
+                "kind": "account",
+                "path": "market.tenor_seconds",
+                "account": "SwapMarket"
+              }
+            ]
+          }
+        },
+        {
+          "name": "swap_position",
+          "writable": true
+        },
+        {
+          "name": "collateral_vault",
+          "docs": [
+            "Collateral vault — holds trader margin deposits"
+          ],
+          "writable": true
+        },
+        {
+          "name": "treasury",
+          "docs": [
+            "Treasury — receives opening fee"
+          ],
+          "writable": true,
+          "relations": [
+            "protocol_state"
+          ]
+        },
+        {
+          "name": "underlying_mint",
+          "docs": [
+            "The underlying token mint (e.g. USDC)"
+          ]
+        },
+        {
+          "name": "trader_token_account",
+          "docs": [
+            "Trader's token account (source of collateral + fee)"
+          ],
+          "writable": true
+        },
+        {
+          "name": "trader",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "direction",
+          "type": {
+            "defined": {
+              "name": "SwapDirection"
+            }
+          }
+        },
+        {
+          "name": "notional",
+          "type": "u64"
+        },
+        {
+          "name": "nonce",
+          "type": "u8"
+        },
+        {
+          "name": "max_rate_bps",
+          "type": "u64"
+        },
+        {
+          "name": "min_rate_bps",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "pause_market",
+      "discriminator": [
+        216,
+        238,
+        4,
+        164,
+        65,
+        11,
+        162,
+        91
+      ],
+      "accounts": [
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "market",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market.underlying_reserve",
+                "account": "SwapMarket"
+              },
+              {
+                "kind": "account",
+                "path": "market.tenor_seconds",
+                "account": "SwapMarket"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": [
+            "protocol_state"
+          ]
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "pause_protocol",
+      "discriminator": [
+        144,
+        95,
+        0,
+        107,
+        119,
+        39,
+        248,
+        141
+      ],
+      "accounts": [
+        {
+          "name": "protocol_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": [
+            "protocol_state"
+          ]
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "request_withdrawal",
+      "discriminator": [
+        251,
+        85,
+        121,
+        205,
+        56,
+        201,
+        12,
+        177
+      ],
+      "accounts": [
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "market",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market.underlying_reserve",
+                "account": "SwapMarket"
+              },
+              {
+                "kind": "account",
+                "path": "market.tenor_seconds",
+                "account": "SwapMarket"
+              }
+            ]
+          }
+        },
+        {
+          "name": "lp_position",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  112
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "withdrawer"
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "lp_vault",
+          "docs": [
+            "LP vault that holds USDC"
+          ],
+          "writable": true
+        },
+        {
+          "name": "lp_mint",
+          "docs": [
+            "LP token mint — program burns shares"
+          ],
+          "writable": true
+        },
+        {
+          "name": "underlying_mint",
+          "docs": [
+            "The underlying token mint (e.g. USDC)"
+          ]
+        },
+        {
+          "name": "withdrawer_lp_token_account",
+          "docs": [
+            "Withdrawer's LP token account (source — burns from here)"
+          ],
+          "writable": true
+        },
+        {
+          "name": "withdrawer_token_account",
+          "docs": [
+            "Withdrawer's USDC token account (destination)"
+          ],
+          "writable": true
+        },
+        {
+          "name": "treasury",
+          "docs": [
+            "Treasury token account — receives withdrawal fee, must match protocol"
+          ],
+          "writable": true
+        },
+        {
+          "name": "withdrawer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "token_program"
+        },
+        {
+          "name": "kamino_deposit_account",
+          "writable": true
+        },
+        {
+          "name": "kamino_reserve",
+          "writable": true
+        },
+        {
+          "name": "kamino_lending_market"
+        },
+        {
+          "name": "kamino_lending_market_authority"
+        },
+        {
+          "name": "reserve_liquidity_mint"
+        },
+        {
+          "name": "reserve_liquidity_supply",
+          "writable": true
+        },
+        {
+          "name": "reserve_collateral_mint",
+          "writable": true
+        },
+        {
+          "name": "collateral_token_program"
+        },
+        {
+          "name": "liquidity_token_program"
+        },
+        {
+          "name": "instruction_sysvar_account"
+        },
+        {
+          "name": "kamino_program"
+        }
+      ],
+      "args": [
+        {
+          "name": "shares_to_burn",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "set_keeper",
+      "discriminator": [
+        102,
+        94,
+        23,
+        78,
+        157,
+        222,
+        243,
+        214
+      ],
+      "accounts": [
+        {
+          "name": "protocol_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": [
+            "protocol_state"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "new_keeper",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "set_market_caps",
+      "discriminator": [
+        179,
+        76,
+        150,
+        184,
+        182,
+        50,
+        244,
+        55
+      ],
+      "accounts": [
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "market",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market.underlying_reserve",
+                "account": "SwapMarket"
+              },
+              {
+                "kind": "account",
+                "path": "market.tenor_seconds",
+                "account": "SwapMarket"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": [
+            "protocol_state"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "max_lp_nav",
+          "type": "u64"
+        },
+        {
+          "name": "max_position_notional",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "set_rate_index_oracle",
+      "docs": [
+        "Admin-only utility for clusters where Kamino K-Lend is not deployed",
+        "(localnet/devnet) and for surfpool E2E that need to drive rate-index",
+        "state to specific values (e.g. organic-liquidation tests). Feature-",
+        "gated so mainnet builds do NOT include it — see [features] in",
+        "programs/anemone/Cargo.toml. On mainnet, rate index comes exclusively",
+        "from `update_rate_index` reading Kamino state."
+      ],
+      "discriminator": [
+        150,
+        13,
+        37,
+        93,
+        3,
+        206,
+        73,
+        171
+      ],
+      "accounts": [
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "market",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market.underlying_reserve",
+                "account": "SwapMarket"
+              },
+              {
+                "kind": "account",
+                "path": "market.tenor_seconds",
+                "account": "SwapMarket"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": [
+            "protocol_state"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "rate_index",
+          "type": "u128"
+        }
+      ]
+    },
+    {
+      "name": "settle_period",
+      "discriminator": [
+        115,
+        57,
+        95,
+        16,
+        21,
+        107,
+        129,
+        130
+      ],
+      "accounts": [
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "market",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market.underlying_reserve",
+                "account": "SwapMarket"
+              },
+              {
+                "kind": "account",
+                "path": "market.tenor_seconds",
+                "account": "SwapMarket"
+              }
+            ]
+          }
+        },
+        {
+          "name": "swap_position",
+          "writable": true
+        },
+        {
+          "name": "lp_vault",
+          "docs": [
+            "LP vault — pays trader profits / receives trader losses"
+          ],
+          "writable": true
+        },
+        {
+          "name": "collateral_vault",
+          "docs": [
+            "Collateral vault — holds trader margin and the protocol-fee source"
+          ],
+          "writable": true
+        },
+        {
+          "name": "treasury",
+          "docs": [
+            "Treasury — receives the per-period protocol fee on the spread leg.",
+            "Same address as `protocol_state.treasury`; mint must match the",
+            "market's underlying mint."
+          ],
+          "writable": true,
+          "relations": [
+            "protocol_state"
+          ]
+        },
+        {
+          "name": "underlying_mint",
+          "docs": [
+            "The underlying token mint (e.g. USDC) — needed for transfer_checked"
+          ]
+        },
+        {
+          "name": "caller",
+          "docs": [
+            "Anyone can call settlement (permissionless — incentivizes keepers)"
+          ],
+          "signer": true
+        },
+        {
+          "name": "token_program"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "sync_kamino_yield",
+      "discriminator": [
+        128,
+        113,
+        51,
+        252,
+        183,
+        226,
+        166,
+        35
+      ],
+      "accounts": [
+        {
+          "name": "market",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market.underlying_reserve",
+                "account": "SwapMarket"
+              },
+              {
+                "kind": "account",
+                "path": "market.tenor_seconds",
+                "account": "SwapMarket"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "unpause_market",
+      "discriminator": [
+        219,
+        203,
+        199,
+        170,
+        212,
+        45,
+        170,
+        80
+      ],
+      "accounts": [
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "market",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market.underlying_reserve",
+                "account": "SwapMarket"
+              },
+              {
+                "kind": "account",
+                "path": "market.tenor_seconds",
+                "account": "SwapMarket"
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": [
+            "protocol_state"
+          ]
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "unpause_protocol",
+      "discriminator": [
+        183,
+        154,
+        5,
+        183,
+        105,
+        76,
+        87,
+        18
+      ],
+      "accounts": [
+        {
+          "name": "protocol_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": [
+            "protocol_state"
+          ]
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "update_rate_index",
+      "discriminator": [
+        191,
+        173,
+        63,
+        26,
+        197,
+        186,
+        0,
+        246
+      ],
+      "accounts": [
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "market",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market.underlying_reserve",
+                "account": "SwapMarket"
+              },
+              {
+                "kind": "account",
+                "path": "market.tenor_seconds",
+                "account": "SwapMarket"
+              }
+            ]
+          }
+        },
+        {
+          "name": "kamino_reserve",
+          "docs": [
+            "Kamino Reserve account — must match what the market was created with."
+          ]
+        },
+        {
+          "name": "keeper",
+          "docs": [
+            "Layer 1 of the rate-index-collapse defense (see SECURITY.md Finding 2).",
+            "Permissionless update_rate_index lets an attacker bundle two calls in",
+            "a single tx so both reads see the same Kamino bsf — the rotation then",
+            "collapses `previous_rate_index == current_rate_index`, and the next",
+            "open_swap quotes apy = 0 against PayFixed for ~spread bps. Gating to",
+            "the keeper closes the trivial path; layer 2 (no-op rotation reject)",
+            "and layer 3 (open_swap apy=0 reject) cover keeper-bot misfires and",
+            "future regressions."
+          ],
+          "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "update_treasury",
+      "discriminator": [
+        60,
+        16,
+        243,
+        66,
+        96,
+        59,
+        254,
+        131
+      ],
+      "accounts": [
+        {
+          "name": "protocol_state",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "new_treasury"
+        },
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": [
+            "protocol_state"
+          ]
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "withdraw_from_kamino",
+      "discriminator": [
+        177,
+        144,
+        191,
+        109,
+        204,
+        151,
+        38,
+        176
+      ],
+      "accounts": [
+        {
+          "name": "protocol_state",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  112,
+                  114,
+                  111,
+                  116,
+                  111,
+                  99,
+                  111,
+                  108
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "keeper",
+          "docs": [
+            "Keeper-only. After PRs #26+#27 added internal Kamino redeem to every",
+            "user-facing exit path (claim_matured, close_position_early,",
+            "liquidate_position, claim_withdrawal/request_withdrawal), the",
+            "trader/LP no longer needs this ix as a self-rescue lane. Leaving it",
+            "permissionless would let an attacker spam-call to keep funds parked",
+            "in lp_vault instead of earning Kamino yield (SECURITY.md Finding 3).",
+            "Keeper-gated mirrors the existing constraint on deposit_to_kamino."
+          ],
+          "signer": true
+        },
+        {
+          "name": "market",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market.underlying_reserve",
+                "account": "SwapMarket"
+              },
+              {
+                "kind": "account",
+                "path": "market.tenor_seconds",
+                "account": "SwapMarket"
+              }
+            ]
+          }
+        },
+        {
+          "name": "lp_vault",
+          "docs": [
+            "Our LP vault — receives USDC back from Kamino"
+          ],
+          "writable": true
+        },
+        {
+          "name": "kamino_deposit_account",
+          "docs": [
+            "Our kamino deposit account — source of k-tokens to redeem"
+          ],
+          "writable": true
+        },
+        {
+          "name": "kamino_reserve",
+          "writable": true
+        },
+        {
+          "name": "kamino_lending_market"
+        },
+        {
+          "name": "kamino_lending_market_authority"
+        },
+        {
+          "name": "reserve_liquidity_mint"
+        },
+        {
+          "name": "reserve_liquidity_supply",
+          "writable": true
+        },
+        {
+          "name": "reserve_collateral_mint",
+          "writable": true
+        },
+        {
+          "name": "collateral_token_program"
+        },
+        {
+          "name": "liquidity_token_program"
+        },
+        {
+          "name": "instruction_sysvar_account"
+        },
+        {
+          "name": "kamino_program",
+          "docs": [
+            "Kamino K-Lend program — must match market.underlying_protocol"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "collateral_amount",
+          "type": "u64"
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "LpPosition",
+      "discriminator": [
+        105,
+        241,
+        37,
+        200,
+        224,
+        2,
+        252,
+        90
+      ]
+    },
+    {
+      "name": "ProtocolState",
+      "discriminator": [
+        33,
+        51,
+        173,
+        134,
+        35,
+        140,
+        195,
+        248
+      ]
+    },
+    {
+      "name": "Reserve",
+      "discriminator": [
+        43,
+        242,
+        204,
+        202,
+        26,
+        247,
+        59,
+        127
+      ]
+    },
+    {
+      "name": "SwapMarket",
+      "discriminator": [
+        1,
+        225,
+        114,
+        244,
+        211,
+        158,
+        72,
+        82
+      ]
+    },
+    {
+      "name": "SwapPosition",
+      "discriminator": [
+        65,
+        203,
+        85,
+        175,
+        129,
+        154,
+        6,
+        152
+      ]
+    }
+  ],
+  "events": [
+    {
+      "name": "LpWithdrawal",
+      "discriminator": [
+        252,
+        217,
+        243,
+        187,
+        155,
+        99,
+        164,
+        209
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "InvalidReserve",
+      "msg": "Kamino reserve does not match market's underlying_reserve"
+    },
+    {
+      "code": 6001,
+      "name": "InvalidRateIndex",
+      "msg": "Rate index cannot be zero"
+    },
+    {
+      "code": 6002,
+      "name": "InvalidElapsedTime",
+      "msg": "Elapsed time must be positive"
+    },
+    {
+      "code": 6003,
+      "name": "MathOverflow",
+      "msg": "Math overflow"
+    },
+    {
+      "code": 6004,
+      "name": "MarketPaused",
+      "msg": "Market is paused"
+    },
+    {
+      "code": 6005,
+      "name": "InvalidVault",
+      "msg": "Invalid vault address"
+    },
+    {
+      "code": 6006,
+      "name": "InvalidMint",
+      "msg": "Invalid mint address"
+    },
+    {
+      "code": 6007,
+      "name": "InvalidAmount",
+      "msg": "Amount must be greater than zero"
+    },
+    {
+      "code": 6008,
+      "name": "InsufficientShares",
+      "msg": "Insufficient shares for withdrawal"
+    },
+    {
+      "code": 6009,
+      "name": "PoolUndercollateralized",
+      "msg": "Withdrawal would leave pool undercollateralized"
+    },
+    {
+      "code": 6010,
+      "name": "StaleOracle",
+      "msg": "Reserve data is stale — refresh before updating rate"
+    },
+    {
+      "code": 6011,
+      "name": "UtilizationExceeded",
+      "msg": "Pool utilization would exceed maximum allowed"
+    },
+    {
+      "code": 6012,
+      "name": "InsufficientCollateral",
+      "msg": "Insufficient collateral for required initial margin"
+    },
+    {
+      "code": 6013,
+      "name": "RateIndexNotInitialized",
+      "msg": "Rate index not initialized — keeper must update rate first"
+    },
+    {
+      "code": 6014,
+      "name": "SettlementNotDue",
+      "msg": "Settlement period has not elapsed yet"
+    },
+    {
+      "code": 6015,
+      "name": "PositionNotOpen",
+      "msg": "Position is not open"
+    },
+    {
+      "code": 6016,
+      "name": "SlippageExceeded",
+      "msg": "Offered rate exceeds trader's slippage tolerance"
+    },
+    {
+      "code": 6017,
+      "name": "PositionNotMatured",
+      "msg": "Position is not matured — cannot claim yet"
+    },
+    {
+      "code": 6018,
+      "name": "AboveMaintenanceMargin",
+      "msg": "Position is above maintenance margin — cannot liquidate"
+    },
+    {
+      "code": 6019,
+      "name": "InvalidAuthority",
+      "msg": "Invalid authority — caller is not the protocol keeper"
+    },
+    {
+      "code": 6020,
+      "name": "InsufficientVaultLiquidity",
+      "msg": "LP vault liquidity is insufficient for this claim — keeper must rebalance"
+    },
+    {
+      "code": 6021,
+      "name": "RateMoveTooLarge",
+      "msg": "Rate index growth between settlements exceeds the circuit-breaker cap"
+    },
+    {
+      "code": 6022,
+      "name": "ParamOutOfRange",
+      "msg": "Parameter exceeds its protocol-level safety cap"
+    },
+    {
+      "code": 6023,
+      "name": "UnsupportedMintExtensions",
+      "msg": "Mint uses an unsupported token program (only classic SPL Token allowed in v1)"
+    },
+    {
+      "code": 6024,
+      "name": "StaleNav",
+      "msg": "LP NAV snapshot is stale — bundle sync_kamino_yield in the same transaction"
+    },
+    {
+      "code": 6025,
+      "name": "UnpaidPnlOutstanding",
+      "msg": "Position has unpaid PnL owed by the LP vault — wait for keeper to refill and settle again"
+    },
+    {
+      "code": 6026,
+      "name": "ProtocolPaused",
+      "msg": "Protocol is paused — admin has blocked new swaps and LP deposits"
+    },
+    {
+      "code": 6027,
+      "name": "PoolCapExceeded",
+      "msg": "Deposit would exceed the market's LP NAV cap"
+    },
+    {
+      "code": 6028,
+      "name": "PositionCapExceeded",
+      "msg": "Position notional exceeds the market's per-trade cap"
+    }
+  ],
+  "types": [
+    {
+      "name": "BigFractionBytes",
+      "serialization": "bytemuckunsafe",
+      "repr": {
+        "kind": "c"
+      },
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "value",
+            "type": {
+              "array": [
+                "u64",
+                4
+              ]
+            }
+          },
+          {
+            "name": "padding",
+            "type": {
+              "array": [
+                "u64",
+                2
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "BorrowRateCurve",
+      "serialization": "bytemuckunsafe",
+      "repr": {
+        "kind": "c"
+      },
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "points",
+            "type": {
+              "array": [
+                {
+                  "defined": {
+                    "name": "CurvePoint"
+                  }
+                },
+                11
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "CurvePoint",
+      "serialization": "bytemuckunsafe",
+      "repr": {
+        "kind": "c"
+      },
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "utilization_rate_bps",
+            "type": "u32"
+          },
+          {
+            "name": "borrow_rate_bps",
+            "type": "u32"
+          }
+        ]
+      }
+    },
+    {
+      "name": "LastUpdate",
+      "serialization": "bytemuckunsafe",
+      "repr": {
+        "kind": "c"
+      },
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "slot",
+            "type": "u64"
+          },
+          {
+            "name": "stale",
+            "type": "u8"
+          },
+          {
+            "name": "price_status",
+            "type": "u8"
+          },
+          {
+            "name": "placeholder",
+            "type": {
+              "array": [
+                "u8",
+                6
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "LpPosition",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "is_initialized",
+            "type": "bool"
+          },
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "shares",
+            "type": "u64"
+          },
+          {
+            "name": "deposited_amount",
+            "type": "u64"
+          },
+          {
+            "name": "status",
+            "type": {
+              "defined": {
+                "name": "LpStatus"
+              }
+            }
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "LpStatus",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Active"
+          },
+          {
+            "name": "Withdrawn"
+          }
+        ]
+      }
+    },
+    {
+      "name": "LpWithdrawal",
+      "docs": [
+        "Audit-trail event for every LP withdrawal. Indexers subscribe to this",
+        "via Anchor's event listener (or parse program logs by tx) to build the",
+        "historical record. Replaces the on-chain `withdrawal_requested_at` /",
+        "`withdrawal_amount` fields that the queued path used to keep — events",
+        "give a richer log per withdrawal at zero on-chain cost."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "withdrawer",
+            "type": "pubkey"
+          },
+          {
+            "name": "shares_burned",
+            "type": "u64"
+          },
+          {
+            "name": "gross_amount",
+            "type": "u64"
+          },
+          {
+            "name": "net_amount",
+            "type": "u64"
+          },
+          {
+            "name": "fee",
+            "type": "u64"
+          },
+          {
+            "name": "kamino_redeemed_usdc",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PositionStatus",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Open"
+          },
+          {
+            "name": "Matured"
+          },
+          {
+            "name": "Liquidated"
+          },
+          {
+            "name": "ClosedEarly"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PriceHeuristic",
+      "serialization": "bytemuckunsafe",
+      "repr": {
+        "kind": "c"
+      },
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "lower",
+            "type": "u64"
+          },
+          {
+            "name": "upper",
+            "type": "u64"
+          },
+          {
+            "name": "exp",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ProtocolState",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "keeper_authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "treasury",
+            "type": "pubkey"
+          },
+          {
+            "name": "total_markets",
+            "type": "u64"
+          },
+          {
+            "name": "protocol_fee_bps",
+            "docs": [
+              "10% performance fee on LP spread (1000 = 10%)"
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "opening_fee_bps",
+            "docs": [
+              "0.05% on notional when opening swap (5 = 0.05%)"
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "liquidation_fee_bps",
+            "docs": [
+              "3% on remaining margin at liquidation (300 = 3%)"
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "withdrawal_fee_bps",
+            "docs": [
+              "0.05% on LP withdrawal (5 = 0.05%)"
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "early_close_fee_bps",
+            "docs": [
+              "5% on collateral returned when trader closes early (500 = 5%)"
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "paused",
+            "docs": [
+              "Global kill switch. When true, `open_swap` and `deposit_liquidity`",
+              "reject — no new capital enters the system. Settlement, liquidation,",
+              "Kamino sync, early close, claim, and LP withdrawals stay live so",
+              "admin cannot freeze user funds in-flight."
+            ],
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PythConfiguration",
+      "serialization": "bytemuckunsafe",
+      "repr": {
+        "kind": "c"
+      },
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "price",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Reserve",
+      "docs": [
+        "Account: Reserve"
+      ],
+      "serialization": "bytemuckunsafe",
+      "repr": {
+        "kind": "c"
+      },
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "version",
+            "type": "u64"
+          },
+          {
+            "name": "last_update",
+            "type": {
+              "defined": {
+                "name": "LastUpdate"
+              }
+            }
+          },
+          {
+            "name": "lending_market",
+            "type": "pubkey"
+          },
+          {
+            "name": "farm_collateral",
+            "type": "pubkey"
+          },
+          {
+            "name": "farm_debt",
+            "type": "pubkey"
+          },
+          {
+            "name": "liquidity",
+            "type": {
+              "defined": {
+                "name": "ReserveLiquidity"
+              }
+            }
+          },
+          {
+            "name": "reserve_liquidity_padding",
+            "type": {
+              "array": [
+                "u64",
+                150
+              ]
+            }
+          },
+          {
+            "name": "collateral",
+            "type": {
+              "defined": {
+                "name": "ReserveCollateral"
+              }
+            }
+          },
+          {
+            "name": "reserve_collateral_padding",
+            "type": {
+              "array": [
+                "u64",
+                150
+              ]
+            }
+          },
+          {
+            "name": "config",
+            "type": {
+              "defined": {
+                "name": "ReserveConfig"
+              }
+            }
+          },
+          {
+            "name": "config_padding",
+            "type": {
+              "array": [
+                "u64",
+                116
+              ]
+            }
+          },
+          {
+            "name": "borrowed_amount_outside_elevation_group",
+            "type": "u64"
+          },
+          {
+            "name": "borrowed_amounts_against_this_reserve_in_elevation_groups",
+            "type": {
+              "array": [
+                "u64",
+                32
+              ]
+            }
+          },
+          {
+            "name": "padding",
+            "type": {
+              "array": [
+                "u64",
+                207
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "ReserveCollateral",
+      "serialization": "bytemuckunsafe",
+      "repr": {
+        "kind": "c"
+      },
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "mint_pubkey",
+            "type": "pubkey"
+          },
+          {
+            "name": "mint_total_supply",
+            "type": "u64"
+          },
+          {
+            "name": "supply_vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "padding1",
+            "type": {
+              "array": [
+                "u128",
+                32
+              ]
+            }
+          },
+          {
+            "name": "padding2",
+            "type": {
+              "array": [
+                "u128",
+                32
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "ReserveConfig",
+      "serialization": "bytemuckunsafe",
+      "repr": {
+        "kind": "c"
+      },
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "status",
+            "type": "u8"
+          },
+          {
+            "name": "asset_tier",
+            "type": "u8"
+          },
+          {
+            "name": "host_fixed_interest_rate_bps",
+            "type": "u16"
+          },
+          {
+            "name": "reserved2",
+            "type": {
+              "array": [
+                "u8",
+                2
+              ]
+            }
+          },
+          {
+            "name": "reserved3",
+            "type": {
+              "array": [
+                "u8",
+                8
+              ]
+            }
+          },
+          {
+            "name": "protocol_take_rate_pct",
+            "type": "u8"
+          },
+          {
+            "name": "protocol_liquidation_fee_pct",
+            "type": "u8"
+          },
+          {
+            "name": "loan_to_value_pct",
+            "type": "u8"
+          },
+          {
+            "name": "liquidation_threshold_pct",
+            "type": "u8"
+          },
+          {
+            "name": "min_liquidation_bonus_bps",
+            "type": "u16"
+          },
+          {
+            "name": "max_liquidation_bonus_bps",
+            "type": "u16"
+          },
+          {
+            "name": "bad_debt_liquidation_bonus_bps",
+            "type": "u16"
+          },
+          {
+            "name": "deleveraging_margin_call_period_secs",
+            "type": "u64"
+          },
+          {
+            "name": "deleveraging_threshold_decrease_bps_per_day",
+            "type": "u64"
+          },
+          {
+            "name": "fees",
+            "type": {
+              "defined": {
+                "name": "ReserveFees"
+              }
+            }
+          },
+          {
+            "name": "borrow_rate_curve",
+            "type": {
+              "defined": {
+                "name": "BorrowRateCurve"
+              }
+            }
+          },
+          {
+            "name": "borrow_factor_pct",
+            "type": "u64"
+          },
+          {
+            "name": "deposit_limit",
+            "type": "u64"
+          },
+          {
+            "name": "borrow_limit",
+            "type": "u64"
+          },
+          {
+            "name": "token_info",
+            "type": {
+              "defined": {
+                "name": "TokenInfo"
+              }
+            }
+          },
+          {
+            "name": "deposit_withdrawal_cap",
+            "type": {
+              "defined": {
+                "name": "WithdrawalCaps"
+              }
+            }
+          },
+          {
+            "name": "debt_withdrawal_cap",
+            "type": {
+              "defined": {
+                "name": "WithdrawalCaps"
+              }
+            }
+          },
+          {
+            "name": "elevation_groups",
+            "type": {
+              "array": [
+                "u8",
+                20
+              ]
+            }
+          },
+          {
+            "name": "disable_usage_as_coll_outside_emode",
+            "type": "u8"
+          },
+          {
+            "name": "utilization_limit_block_borrowing_above_pct",
+            "type": "u8"
+          },
+          {
+            "name": "autodeleverage_enabled",
+            "type": "u8"
+          },
+          {
+            "name": "reserved1",
+            "type": {
+              "array": [
+                "u8",
+                1
+              ]
+            }
+          },
+          {
+            "name": "borrow_limit_outside_elevation_group",
+            "type": "u64"
+          },
+          {
+            "name": "borrow_limit_against_this_collateral_in_elevation_group",
+            "type": {
+              "array": [
+                "u64",
+                32
+              ]
+            }
+          },
+          {
+            "name": "deleveraging_bonus_increase_bps_per_day",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ReserveFees",
+      "serialization": "bytemuckunsafe",
+      "repr": {
+        "kind": "c"
+      },
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "borrow_fee_sf",
+            "type": "u64"
+          },
+          {
+            "name": "flash_loan_fee_sf",
+            "type": "u64"
+          },
+          {
+            "name": "padding",
+            "type": {
+              "array": [
+                "u8",
+                8
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "ReserveLiquidity",
+      "serialization": "bytemuckunsafe",
+      "repr": {
+        "kind": "c"
+      },
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "mint_pubkey",
+            "type": "pubkey"
+          },
+          {
+            "name": "supply_vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "fee_vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "available_amount",
+            "type": "u64"
+          },
+          {
+            "name": "borrowed_amount_sf",
+            "type": "u128"
+          },
+          {
+            "name": "market_price_sf",
+            "type": "u128"
+          },
+          {
+            "name": "market_price_last_updated_ts",
+            "type": "u64"
+          },
+          {
+            "name": "mint_decimals",
+            "type": "u64"
+          },
+          {
+            "name": "deposit_limit_crossed_timestamp",
+            "type": "u64"
+          },
+          {
+            "name": "borrow_limit_crossed_timestamp",
+            "type": "u64"
+          },
+          {
+            "name": "cumulative_borrow_rate_bsf",
+            "type": {
+              "defined": {
+                "name": "BigFractionBytes"
+              }
+            }
+          },
+          {
+            "name": "accumulated_protocol_fees_sf",
+            "type": "u128"
+          },
+          {
+            "name": "accumulated_referrer_fees_sf",
+            "type": "u128"
+          },
+          {
+            "name": "pending_referrer_fees_sf",
+            "type": "u128"
+          },
+          {
+            "name": "absolute_referral_rate_sf",
+            "type": "u128"
+          },
+          {
+            "name": "token_program",
+            "type": "pubkey"
+          },
+          {
+            "name": "padding2",
+            "type": {
+              "array": [
+                "u64",
+                51
+              ]
+            }
+          },
+          {
+            "name": "padding3",
+            "type": {
+              "array": [
+                "u128",
+                32
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "ScopeConfiguration",
+      "serialization": "bytemuckunsafe",
+      "repr": {
+        "kind": "c"
+      },
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "price_feed",
+            "type": "pubkey"
+          },
+          {
+            "name": "price_chain",
+            "type": {
+              "array": [
+                "u16",
+                4
+              ]
+            }
+          },
+          {
+            "name": "twap_chain",
+            "type": {
+              "array": [
+                "u16",
+                4
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "SwapDirection",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "PayFixed"
+          },
+          {
+            "name": "ReceiveFixed"
+          }
+        ]
+      }
+    },
+    {
+      "name": "SwapMarket",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "protocol_state",
+            "type": "pubkey"
+          },
+          {
+            "name": "underlying_protocol",
+            "type": "pubkey"
+          },
+          {
+            "name": "underlying_reserve",
+            "type": "pubkey"
+          },
+          {
+            "name": "underlying_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "lp_vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "kamino_deposit_account",
+            "type": "pubkey"
+          },
+          {
+            "name": "collateral_vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "lp_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "tenor_seconds",
+            "type": "i64"
+          },
+          {
+            "name": "settlement_period_seconds",
+            "type": "i64"
+          },
+          {
+            "name": "max_utilization_bps",
+            "docs": [
+              "6000 = 60%"
+            ],
+            "type": "u16"
+          },
+          {
+            "name": "base_spread_bps",
+            "type": "u16"
+          },
+          {
+            "name": "lp_nav",
+            "docs": [
+              "Net asset value of the LP pool in underlying-token decimals. Tracks",
+              "\"how much USDC the LPs collectively have claim to\", including yield",
+              "accrued via sync_kamino_yield and PnL settled against the lp_vault.",
+              "`shares * lp_nav / total_lp_shares` is the redeemable USDC per share."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "total_lp_shares",
+            "type": "u64"
+          },
+          {
+            "name": "total_fixed_notional",
+            "type": "u64"
+          },
+          {
+            "name": "total_variable_notional",
+            "type": "u64"
+          },
+          {
+            "name": "previous_rate_index",
+            "type": "u128"
+          },
+          {
+            "name": "previous_rate_update_ts",
+            "type": "i64"
+          },
+          {
+            "name": "current_rate_index",
+            "type": "u128"
+          },
+          {
+            "name": "last_rate_update_ts",
+            "type": "i64"
+          },
+          {
+            "name": "total_open_positions",
+            "type": "u64"
+          },
+          {
+            "name": "total_kamino_collateral",
+            "type": "u64"
+          },
+          {
+            "name": "last_kamino_snapshot_usdc",
+            "docs": [
+              "Last known USDC value of the k-tokens in `kamino_deposit_account`.",
+              "Updated by `sync_kamino_yield`; the diff since this snapshot becomes",
+              "credited yield in lp_nav. Separate from `total_kamino_collateral`",
+              "(which tracks the raw k-token balance, not the USDC value)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "last_kamino_sync_ts",
+            "docs": [
+              "Unix timestamp of the most recent `sync_kamino_yield` call. User-facing",
+              "LP handlers require this to be recent via MAX_NAV_STALENESS_SECS so",
+              "deposits and withdrawals always price against a fresh NAV. On devnet",
+              "(stub-oracle mode) this is bumped by a no-op sync — there is no Kamino",
+              "yield to accrue, but the timestamp still marks \"fresh enough\"."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "status",
+            "type": "u8"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "max_lp_nav",
+            "docs": [
+              "Hard cap on `lp_nav`. `deposit_liquidity` rejects when the resulting",
+              "NAV would exceed this. Lets a fresh market grow gradually instead of",
+              "absorbing one large depositor up to its theoretical limit."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "max_position_notional",
+            "docs": [
+              "Hard cap on a single trader's `notional` at `open_swap`. Limits the",
+              "blast radius of any single position — even with a healthy pool, no",
+              "trader can open beyond this size."
+            ],
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "SwapPosition",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "market",
+            "type": "pubkey"
+          },
+          {
+            "name": "direction",
+            "type": {
+              "defined": {
+                "name": "SwapDirection"
+              }
+            }
+          },
+          {
+            "name": "notional",
+            "type": "u64"
+          },
+          {
+            "name": "fixed_rate_bps",
+            "type": "u64"
+          },
+          {
+            "name": "spread_bps_at_open",
+            "docs": [
+              "Spread component locked into `fixed_rate_bps` at open time. The",
+              "quoted rate is `current_apy_bps ± spread_bps`; storing the spread",
+              "separately lets `settle_period` charge the protocol fee against the",
+              "deterministic spread payment regardless of which direction the",
+              "variable rate moved (Finding 11 follow-up — protocol_fee_bps wiring)."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "collateral_deposited",
+            "type": "u64"
+          },
+          {
+            "name": "collateral_remaining",
+            "type": "u64"
+          },
+          {
+            "name": "entry_rate_index",
+            "type": "u128"
+          },
+          {
+            "name": "last_settled_rate_index",
+            "type": "u128"
+          },
+          {
+            "name": "realized_pnl",
+            "type": "i64"
+          },
+          {
+            "name": "num_settlements",
+            "type": "u16"
+          },
+          {
+            "name": "unpaid_pnl",
+            "docs": [
+              "Trader PnL credit that the lp_vault could not cover at the moment of",
+              "settlement/close/liquidation. Kept as i64 for symmetry but in practice",
+              "only takes values >= 0 — the trader-loss path is capped by",
+              "`collateral_remaining`, so shortfalls only arise when the trader is",
+              "*owed* money and the vault is drained. Next settle_period tries to",
+              "drain this first (catchup), and claim_matured / close_position_early",
+              "refuse to finalize while it's non-zero. Addressed together with the",
+              "keeper's pendingWithdrawals job extension that refills the vault",
+              "whenever sum(unpaid_pnl) + pending LP withdrawals exceeds what the",
+              "vault holds."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "open_timestamp",
+            "type": "i64"
+          },
+          {
+            "name": "maturity_timestamp",
+            "type": "i64"
+          },
+          {
+            "name": "next_settlement_ts",
+            "type": "i64"
+          },
+          {
+            "name": "last_settlement_ts",
+            "type": "i64"
+          },
+          {
+            "name": "status",
+            "type": {
+              "defined": {
+                "name": "PositionStatus"
+              }
+            }
+          },
+          {
+            "name": "nonce",
+            "type": "u8"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "SwitchboardConfiguration",
+      "serialization": "bytemuckunsafe",
+      "repr": {
+        "kind": "c"
+      },
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "price_aggregator",
+            "type": "pubkey"
+          },
+          {
+            "name": "twap_aggregator",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "TokenInfo",
+      "serialization": "bytemuckunsafe",
+      "repr": {
+        "kind": "c"
+      },
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "name",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "heuristic",
+            "type": {
+              "defined": {
+                "name": "PriceHeuristic"
+              }
+            }
+          },
+          {
+            "name": "max_twap_divergence_bps",
+            "type": "u64"
+          },
+          {
+            "name": "max_age_price_seconds",
+            "type": "u64"
+          },
+          {
+            "name": "max_age_twap_seconds",
+            "type": "u64"
+          },
+          {
+            "name": "scope_configuration",
+            "type": {
+              "defined": {
+                "name": "ScopeConfiguration"
+              }
+            }
+          },
+          {
+            "name": "switchboard_configuration",
+            "type": {
+              "defined": {
+                "name": "SwitchboardConfiguration"
+              }
+            }
+          },
+          {
+            "name": "pyth_configuration",
+            "type": {
+              "defined": {
+                "name": "PythConfiguration"
+              }
+            }
+          },
+          {
+            "name": "block_price_usage",
+            "type": "u8"
+          },
+          {
+            "name": "reserved",
+            "type": {
+              "array": [
+                "u8",
+                7
+              ]
+            }
+          },
+          {
+            "name": "padding",
+            "type": {
+              "array": [
+                "u64",
+                19
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "WithdrawalCaps",
+      "serialization": "bytemuckunsafe",
+      "repr": {
+        "kind": "c"
+      },
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "config_capacity",
+            "type": "i64"
+          },
+          {
+            "name": "current_total",
+            "type": "i64"
+          },
+          {
+            "name": "last_interval_start_timestamp",
+            "type": "u64"
+          },
+          {
+            "name": "config_interval_length_seconds",
+            "type": "u64"
+          }
+        ]
+      }
+    }
+  ]
+}

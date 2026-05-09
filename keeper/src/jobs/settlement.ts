@@ -1,23 +1,21 @@
 import { PublicKey } from "@solana/web3.js";
-import bs58 from "bs58";
 import { KeeperClient } from "../client";
 import { KeeperConfig } from "../config";
-import { deriveLpVaultPda, deriveCollateralVaultPda } from "../utils/pda";
+import {
+  deriveLpVaultPda,
+  deriveCollateralVaultPda,
+  deriveProtocolPda,
+} from "../utils/pda";
 import { priorityFeeInstructions } from "../utils/priorityFee";
 import { logger } from "../utils/logger";
+import { fetchAllSafe } from "../utils/programAccounts";
 
-// Offset of the `status` field in the SwapPosition account, measured from
-// the start of the account data (after the 8-byte discriminator).
-// Anchor serializes fields in declaration order; see state/position.rs.
-//
-// Layout: 8 (disc) + 32 (owner) + 32 (market) + 1 (direction) + 8 (notional)
-//       + 8 (fixed_rate_bps) + 8 (collateral_deposited)
-//       + 8 (collateral_remaining) + 16 (entry_rate_index)
-//       + 16 (last_settled_rate_index) + 8 (realized_pnl) + 2 (num_settlements)
-//       + 8 (unpaid_pnl) + 8 (open_ts) + 8 (maturity_ts)
-//       + 8 (next_settlement_ts) + 8 (last_settlement_ts) = offset 185 for status
-const STATUS_OFFSET = 185;
-const STATUS_OPEN = 0;
+const TOKEN_PROGRAM = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
+
+// SwapPosition::SIZE (state/position.rs). Used as the dataSize filter so
+// stale layouts left over from previous program versions get excluded at
+// the RPC level instead of blowing up the decoder.
+const SWAP_POSITION_SIZE = 198;
 
 /**
  * Fetches every Open SwapPosition whose next_settlement_ts has passed, then
@@ -29,18 +27,24 @@ export async function runSettlement(
   config: KeeperConfig,
 ): Promise<void> {
   try {
-    const positions = await (client.program.account as any).swapPosition.all([
-      {
-        memcmp: {
-          offset: STATUS_OFFSET,
-          bytes: bs58.encode(Buffer.from([STATUS_OPEN])),
-        },
-      },
-    ]);
+    const positions = await fetchAllSafe<any>(
+      client.program,
+      "SwapPosition",
+      SWAP_POSITION_SIZE,
+    );
 
     const now = Math.floor(Date.now() / 1000);
+    // Restrict to positions in the configured market. The protocol treasury
+    // is global (one PDA), but the on-chain `token::mint = underlying_mint`
+    // constraint means settle only succeeds when the position's market uses
+    // the same underlying as the treasury. Positions in other / older
+    // markets get skipped here so a stale market doesn't poison every tick.
+    const ownMarket = config.marketPda.toBase58();
     const due = positions.filter(
-      (p: any) => p.account.nextSettlementTs.toNumber() <= now,
+      (p) =>
+        isOpen(p.account.status) &&
+        p.account.market.toBase58() === ownMarket &&
+        p.account.nextSettlementTs.toNumber() <= now,
     );
 
     if (due.length === 0) {
@@ -58,6 +62,13 @@ export async function runSettlement(
   }
 }
 
+// Anchor decodes a Rust enum into a JS object whose single key is the variant
+// name in camelCase. `PositionStatus::Open` → `{ open: {} }`. Checking by
+// shape avoids depending on byte-offsets that shift when struct fields change.
+function isOpen(status: any): boolean {
+  return status != null && typeof status === "object" && "open" in status;
+}
+
 async function settleOne(
   client: KeeperClient,
   config: KeeperConfig,
@@ -68,17 +79,23 @@ async function settleOne(
     const marketAccount = await (client.program.account as any).swapMarket.fetch(
       market,
     );
+    const protocolPda = deriveProtocolPda(config.programId);
+    const protocolState = await (client.program.account as any).protocolState.fetch(
+      protocolPda,
+    );
 
     const sig = await (client.program.methods as any)
       .settlePeriod()
       .accountsStrict({
+        protocolState: protocolPda,
         market,
         swapPosition: position,
         lpVault: deriveLpVaultPda(market, config.programId),
         collateralVault: deriveCollateralVaultPda(market, config.programId),
+        treasury: protocolState.treasury,
         underlyingMint: marketAccount.underlyingMint,
         caller: client.keeperWallet.publicKey,
-        tokenProgram: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
+        tokenProgram: TOKEN_PROGRAM,
       })
       .preInstructions(priorityFeeInstructions(config.priorityFeeMicrolamports))
       .rpc();
