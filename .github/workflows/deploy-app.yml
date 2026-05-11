@@ -48,6 +48,11 @@ jobs:
 
       - name: Build
         working-directory: Anemone/app
+        env:
+          NEXT_PUBLIC_RPC_URL: ${{ vars.NEXT_PUBLIC_RPC_URL }}
+          NEXT_PUBLIC_PROGRAM_ID: ${{ vars.NEXT_PUBLIC_PROGRAM_ID }}
+          NEXT_PUBLIC_NETWORK: ${{ vars.NEXT_PUBLIC_NETWORK }}
+          NEXT_PUBLIC_MARKET_WHITELIST: ${{ vars.NEXT_PUBLIC_MARKET_WHITELIST }}
         run: yarn build
 
       - name: Configure AWS credentials (OIDC)
