@@ -7,3 +7,4 @@ test-ledger
 .yarn
 tests/fixtures/*.so
 .surfpool/
+**/*.env
