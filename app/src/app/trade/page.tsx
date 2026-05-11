@@ -11,7 +11,7 @@ import {
   SwapDirection,
   type Market,
   type Protocol,
-} from "@anemone/sdk";
+} from "@anemonedefi/sdk";
 import { Nav } from "@/components/Nav";
 import { Footer } from "@/components/Footer";
 import { RevealOnScroll } from "@/components/RevealOnScroll";

@@ -6,7 +6,7 @@ import type {
   Market,
   Protocol,
   SwapPosition,
-} from "@anemone/sdk";
+} from "@anemonedefi/sdk";
 import { getReadonlyClient } from "./anemone";
 
 const REFRESH_MS = 30_000;

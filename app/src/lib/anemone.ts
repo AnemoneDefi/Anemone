@@ -1,4 +1,4 @@
-import { Anemone, type AnchorWallet as SdkAnchorWallet } from "@anemone/sdk";
+import { Anemone, type AnchorWallet as SdkAnchorWallet } from "@anemonedefi/sdk";
 import { Connection } from "@solana/web3.js";
 import type { AnchorWallet as AdapterAnchorWallet } from "@solana/wallet-adapter-react";
 

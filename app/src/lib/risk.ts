@@ -11,7 +11,7 @@
  *   - programs/anemone/src/helpers/settlement.rs::calculate_maintenance_margin
  */
 
-import { SwapDirection } from "@anemone/sdk";
+import { SwapDirection } from "@anemonedefi/sdk";
 
 const SECONDS_PER_YEAR = 31_536_000n;
 const BPS = 10_000n;
