@@ -12,7 +12,7 @@ import {
   createAssociatedTokenAccountIdempotentInstruction,
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
-import type { Market, LpPosition, Protocol } from "@anemone/sdk";
+import type { Market, LpPosition, Protocol } from "@anemonedefi/sdk";
 import { Nav } from "@/components/Nav";
 import { Footer } from "@/components/Footer";
 import { RevealOnScroll } from "@/components/RevealOnScroll";

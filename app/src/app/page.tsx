@@ -11,7 +11,7 @@ import {
   formatUsdcCompact,
 } from "@/lib/format";
 import { calculateSpread } from "@/lib/risk";
-import { MarketStatus, SwapDirection, type Market } from "@anemone/sdk";
+import { MarketStatus, SwapDirection, type Market } from "@anemonedefi/sdk";
 
 interface LandingDerived {
   variableBps: bigint;

@@ -14,7 +14,7 @@ import {
   formatUsdcCompact,
   utilizationPct,
 } from "@/lib/format";
-import { MarketStatus as SdkMarketStatus, type Market as SdkMarket } from "@anemone/sdk";
+import { MarketStatus as SdkMarketStatus, type Market as SdkMarket } from "@anemonedefi/sdk";
 import s from "./markets.module.css";
 
 type RowStatus = "live" | "soon";
