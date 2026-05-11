@@ -2,8 +2,10 @@
 # yarn lockfile v1
 
 
-"@anemone/sdk@file:../../SDK":
+"@anemonedefi/sdk@^0.1.0":
   version "0.1.0"
+  resolved "https://registry.yarnpkg.com/@anemonedefi/sdk/-/sdk-0.1.0.tgz#2bdd66468248a10af4f8876829a90df053761aa3"
+  integrity sha512-FuX3ksoyGBoCk/T+/COmvEm2BeDYDpTI3li1JQmFvUGy7uccujY6OopDrud6E7PdjQFU2e50TtZrOyhOfUylPg==
   dependencies:
     "@coral-xyz/anchor" "^0.32.1"
     "@solana/spl-token" "^0.4.9"

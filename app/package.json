@@ -9,7 +9,7 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "@anemone/sdk": "file:../../SDK",
+    "@anemonedefi/sdk": "^0.1.0",
     "@coral-xyz/anchor": "^0.32.1",
     "@kamino-finance/klend-sdk": "^7.3.22",
     "@solana/spl-token": "^0.4.14",
