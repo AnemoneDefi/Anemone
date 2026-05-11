@@ -1,0 +1,75 @@
+name: Build & deploy dApp — prod
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - ".github/workflows/deploy-app.yml"
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-2
+  S3_BUCKET: anemone-app-prod
+  CF_DISTRIBUTION_ID: ${{ secrets.APP_CF_DISTRIBUTION_ID }}
+
+jobs:
+  deploy:
+    name: Build, sync, invalidate
+    runs-on: ubuntu-latest
+    environment: prod
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # SDK is a local file dep (../../SDK) — checkout full org structure
+          path: Anemone
+
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/SDK
+          path: SDK
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "yarn"
+          cache-dependency-path: Anemone/app/yarn.lock
+
+      - name: Install dependencies
+        working-directory: Anemone/app
+        run: yarn install --frozen-lockfile
+
+      - name: Build
+        working-directory: Anemone/app
+        run: yarn build
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DAPP_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Sync to S3
+        working-directory: Anemone/app
+        run: |
+          aws s3 sync out/ s3://$S3_BUCKET/ \
+            --delete \
+            --cache-control "public, max-age=3600" \
+            --exclude "_next/static/*"
+
+          # Static assets: cache forever (content-hashed filenames)
+          aws s3 sync out/_next/static/ s3://$S3_BUCKET/_next/static/ \
+            --cache-control "public, max-age=31536000, immutable"
+
+      - name: Invalidate CloudFront cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id $CF_DISTRIBUTION_ID \
+            --paths "/*"
