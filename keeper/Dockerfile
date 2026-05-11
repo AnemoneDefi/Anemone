@@ -19,5 +19,6 @@ COPY package.json yarn.lock ./
 RUN yarn install --frozen-lockfile --production
 
 COPY --from=builder /app/dist ./dist
+COPY anemone.idl.json ./
 
 CMD ["node", "dist/index.js"]
